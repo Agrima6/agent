@@ -1,0 +1,47 @@
+[
+  {
+    "id": "q_backend_1",
+    "type": "scenario",
+    "difficulty": "medium",
+    "competencies": ["problem_solving", "technical_depth"],
+    "question_text": "Imagine your application suddenly receives five times its normal traffic. The database is getting a lot of repeated reads and users are reporting slow pages. How would you investigate the issue and where, if anywhere, would caching fit into your solution?",
+    "expected_topics": ["identify bottleneck", "separate read/write path", "caching strategy", "TTL/invalidation", "consistency", "monitoring", "failure handling"],
+    "followup_topics": ["cache invalidation", "cache failure behavior", "consistency trade-offs"]
+  },
+  {
+    "id": "q_backend_2",
+    "type": "scenario",
+    "difficulty": "medium",
+    "competencies": ["technical_depth", "decision_making"],
+    "question_text": "You need to design an API that must remain reliable even if a downstream payment provider is slow or down. How would you approach this?",
+    "expected_topics": ["timeouts", "retries", "circuit breaker", "idempotency", "fallback/queueing", "monitoring"],
+    "followup_topics": ["idempotency keys", "retry storms", "dead-letter queues"]
+  },
+  {
+    "id": "q_general_1",
+    "type": "behavioral",
+    "difficulty": "easy",
+    "competencies": ["ownership", "collaboration"],
+    "question_text": "Tell me about a time you disagreed with a teammate about a technical decision. How did you handle it?",
+    "expected_topics": ["specific situation", "reasoning presented", "resolution", "outcome", "what they learned"],
+    "followup_topics": ["what changed their mind", "what they'd do differently"]
+  },
+  {
+    "id": "q_general_2",
+    "type": "behavioral",
+    "difficulty": "easy",
+    "competencies": ["adaptability", "learning_ability"],
+    "question_text": "Describe a situation where you had to learn something completely new under time pressure. What did you do?",
+    "expected_topics": ["specific context", "learning approach", "outcome", "time constraint handled"],
+    "followup_topics": ["what resources they used", "how they validated they'd learned enough"]
+  },
+  {
+    "id": "q_support_1",
+    "type": "scenario",
+    "difficulty": "medium",
+    "competencies": ["customer_handling", "communication"],
+    "question_text": "A customer is angry because a bug affected their business for two days before anyone noticed. How would you handle the conversation and the follow-up?",
+    "expected_topics": ["acknowledge impact", "clear communication", "root cause explanation", "prevention", "follow-up plan"],
+    "followup_topics": ["how they'd rebuild trust", "what they'd change in monitoring"]
+  }
+]

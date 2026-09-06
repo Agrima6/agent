@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Workmate.IQ — Candidate Interview</title>
+<script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 520px; margin: 60px auto; text-align: center; color: #1e293b; }
+  h1 { font-size: 28px; margin-bottom: 8px; }
+  p { color: #64748b; font-size: 15px; margin-bottom: 24px; }
+  button { padding: 12px 28px; font-size: 16px; font-weight: 600; cursor: pointer; border-radius: 8px; border: none; background: #2563eb; color: #fff; transition: background 0.2s; }
+  button:hover:not(:disabled) { background: #1d4ed8; }
+  button:disabled { background: #94a3b8; cursor: not-allowed; }
+  #status-container { margin-top: 24px; padding: 16px; border-radius: 8px; background: #f8fafc; border: 1px solid #e2e8f0; }
+  #status { font-size: 15px; color: #334155; font-weight: 500; }
+  .pulse-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #10b981; margin-right: 8px; animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
+</style>
+</head>
+<body>
+<h1>Your AI Interview</h1>
+<p>Make sure your microphone is enabled, then click below when ready.</p>
+<button id="joinBtn">Join Interview</button>
+<div id="status-container" style="display:none">
+  <div id="status"></div>
+</div>
+
+<script>
+const params = new URLSearchParams(window.location.search);
+const interviewId = params.get("interview_id");
+const statusContainer = document.getElementById("status-container");
+const statusEl = document.getElementById("status");
+const joinBtn = document.getElementById("joinBtn");
+
+function setStatus(text, showPulse = false) {
+  statusContainer.style.display = "block";
+  statusEl.innerHTML = (showPulse ? '<span class="pulse-dot"></span>' : '') + text;
+}
+
+joinBtn.onclick = async () => {
+  if (!interviewId) {
+    setStatus("Error: Missing interview_id in URL");
+    return;
+  }
+  joinBtn.disabled = true;
+  setStatus("Requesting interview access token...");
+
+  try {
+    const res = await fetch(`/v1/interviews/${interviewId}/candidate-token`, { method: "POST" });
+    if (!res.ok) throw new Error("Failed to get candidate token");
+    const { token, url } = await res.json();
+
+    setStatus("Connecting to room...");
+    const room = new LivekitClient.Room({
+      adaptiveStream: true,
+      dynacast: true,
+    });
+
+    const attachTrack = (track) => {
+      if (track.kind === "audio") {
+        const el = track.attach();
+        el.autoplay = true;
+        document.body.appendChild(el);
+        el.play().catch(e => console.log("Autoplay note:", e));
+      }
+    };
+
+    room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+      attachTrack(track);
+      setStatus(`Connected with AI Interviewer. Speaking now...`, true);
+    });
+
+    room.on(LivekitClient.RoomEvent.ParticipantConnected, (participant) => {
+      setStatus(`Interviewer joined the room. Starting...`, true);
+    });
+
+    room.on(LivekitClient.RoomEvent.Disconnected, () => {
+      setStatus("Interview completed. You can return to the HR console for the report.");
+    });
+
+    await room.connect(url, token);
+    await room.localParticipant.setMicrophoneEnabled(true);
+
+    // Attach any existing remote audio tracks
+    room.remoteParticipants.forEach((participant) => {
+      participant.trackPublications.forEach((pub) => {
+        if (pub.track) attachTrack(pub.track);
+      });
+    });
+
+    setStatus("Connected. The AI interviewer is joining...", true);
+  } catch (err) {
+    console.error(err);
+    joinBtn.disabled = false;
+    setStatus("Connection error: " + err.message);
+  }
+};
+</script>
+</body>
+</html>

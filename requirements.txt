@@ -1,0 +1,15 @@
+fastapi>=0.115,<0.116
+uvicorn[standard]>=0.30,<0.31
+sqlalchemy>=2.0,<2.1
+pydantic>=2.9,<3
+python-multipart>=0.0.9
+pypdf>=4.3
+openai>=2,<3
+python-dotenv>=1.0,<2
+livekit-api>=1.2,<2
+livekit-agents==1.7.0
+livekit-plugins-silero==1.7.0
+livekit-plugins-groq==1.7.0
+livekit-plugins-elevenlabs==1.7.0
+edge-tts>=7.0.0
+sarvamai>=0.1.32

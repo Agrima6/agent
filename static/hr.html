@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Workmate.IQ — HR (MVP)</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; }
+  fieldset { margin-bottom: 24px; padding: 16px; }
+  label { display: block; margin: 8px 0 4px; }
+  input, select { width: 100%; padding: 6px; box-sizing: border-box; }
+  button { margin-top: 12px; padding: 8px 16px; cursor: pointer; }
+  pre { background: #f4f4f4; padding: 12px; overflow-x: auto; white-space: pre-wrap; }
+  a.room-link { display: inline-block; margin-top: 8px; }
+</style>
+</head>
+<body>
+<h1>Workmate.IQ — HR Console (MVP)</h1>
+
+<fieldset>
+  <legend>1. Create role</legend>
+  <label>Role name</label>
+  <input id="roleName" value="Backend Engineer" />
+  <button onclick="createRole()">Create role</button>
+  <pre id="roleOut"></pre>
+</fieldset>
+
+<fieldset>
+  <legend>2. Create candidate + upload resume</legend>
+  <label>Candidate name</label>
+  <input id="candName" value="Harshit Sharma" />
+  <label>Resume (PDF or .txt)</label>
+  <input id="resumeFile" type="file" />
+  <button onclick="createCandidate()">Create candidate + upload resume</button>
+  <pre id="candOut"></pre>
+</fieldset>
+
+<fieldset>
+  <legend>3. Create interview</legend>
+  <button onclick="createInterview()">Create interview</button>
+  <pre id="interviewOut"></pre>
+  <a id="candidateLink" class="room-link" style="display:none" target="_blank">Open candidate interview room →</a>
+</fieldset>
+
+<fieldset>
+  <legend>4. Get report (after interview completes)</legend>
+  <button onclick="getReport()">Fetch report</button>
+  <pre id="reportOut"></pre>
+</fieldset>
+
+<script>
+let roleId, candidateId, interviewId;
+
+async function createRole() {
+  const fd = new FormData();
+  fd.append("name", document.getElementById("roleName").value);
+  const res = await fetch("/v1/roles", { method: "POST", body: fd });
+  const data = await res.json();
+  roleId = data.id;
+  document.getElementById("roleOut").textContent = JSON.stringify(data, null, 2);
+}
+
+async function createCandidate() {
+  const fd = new FormData();
+  fd.append("name", document.getElementById("candName").value);
+  const res = await fetch("/v1/candidates", { method: "POST", body: fd });
+  const data = await res.json();
+  candidateId = data.id;
+
+  const file = document.getElementById("resumeFile").files[0];
+  if (file) {
+    const fd2 = new FormData();
+    fd2.append("file", file);
+    const res2 = await fetch(`/v1/candidates/${candidateId}/resume`, { method: "POST", body: fd2 });
+    const data2 = await res2.json();
+    document.getElementById("candOut").textContent = JSON.stringify(data2, null, 2);
+  } else {
+    document.getElementById("candOut").textContent = JSON.stringify(data, null, 2);
+  }
+}
+
+async function createInterview() {
+  const fd = new FormData();
+  fd.append("candidate_id", candidateId);
+  fd.append("role_id", roleId);
+  const res = await fetch("/v1/interviews", { method: "POST", body: fd });
+  const data = await res.json();
+  interviewId = data.id;
+  document.getElementById("interviewOut").textContent = JSON.stringify(data, null, 2);
+  const link = document.getElementById("candidateLink");
+  link.href = `/static/room.html?interview_id=${interviewId}`;
+  link.style.display = "inline-block";
+}
+
+async function getReport() {
+  const res = await fetch(`/v1/interviews/${interviewId}/report`);
+  const data = await res.json();
+  document.getElementById("reportOut").textContent = JSON.stringify(data, null, 2);
+}
+</script>
+</body>
+</html>
