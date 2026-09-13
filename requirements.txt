@@ -1,6 +1,7 @@
 fastapi>=0.115,<0.116
 uvicorn[standard]>=0.30,<0.31
 sqlalchemy>=2.0,<2.1
+psycopg2-binary>=2.9,<3
 pydantic>=2.9,<3
 python-multipart>=0.0.9
 pypdf>=4.3

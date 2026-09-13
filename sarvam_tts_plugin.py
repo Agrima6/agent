@@ -6,6 +6,26 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 logger = logging.getLogger("sarvam-tts")
 
+# Warm, professional Indian male voice on bulbul:v3.
+DEFAULT_PRESET_SPEAKER = "aditya"
+
+# Sarvam's API rejects any other value outright (400) — a bad SARVAM_SAMPLE_RATE in .env would
+# otherwise silently break 100% of speech output with no audio at all, which is a much harder
+# failure to diagnose than a slightly-off sample rate.
+_ALLOWED_SAMPLE_RATES = (8000, 16000, 22050, 24000, 32000, 44100, 48000)
+_DEFAULT_SAMPLE_RATE = 22050
+
+
+def _sanitize_sample_rate(sample_rate: int) -> int:
+    if sample_rate in _ALLOWED_SAMPLE_RATES:
+        return sample_rate
+    fallback = min(_ALLOWED_SAMPLE_RATES, key=lambda r: abs(r - sample_rate))
+    logger.warning(
+        f"SARVAM_SAMPLE_RATE={sample_rate} is not one of Sarvam's allowed rates "
+        f"{_ALLOWED_SAMPLE_RATES} — every TTS call would fail with a 400. Using {fallback} instead."
+    )
+    return fallback
+
 
 class SarvamTTS(tts.TTS):
     """Sarvam AI Bulbul TTS supporting presets and custom cloned voices (svc-...)."""
@@ -14,11 +34,12 @@ class SarvamTTS(tts.TTS):
         self,
         api_key: str,
         model: str = "bulbul:v3",
-        speaker: str = "svc-e6c0f0a8-9386-4eb2-8558-2fc0036f53a4",
+        speaker: str = DEFAULT_PRESET_SPEAKER,
         language_code: str = "en-IN",
         pace: float = 1.0,
-        sample_rate: int = 22050,
+        sample_rate: int = _DEFAULT_SAMPLE_RATE,
     ):
+        sample_rate = _sanitize_sample_rate(sample_rate)
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=sample_rate,
@@ -95,11 +116,19 @@ class SarvamChunkedStream(tts.ChunkedStream):
             "output_audio_codec": "mp3",
         }
 
-        # Check if the speaker is a cloned voice ID (starts with svc-) or preset name
-        if self._speaker.startswith("svc-"):
-            payload["voice_id"] = self._speaker
-        else:
-            payload["speaker"] = self._speaker
+        # Sarvam's public /text-to-speech API only accepts the documented `speaker` enum
+        # (preset names) — it has no field for a Content Studio cloned voice ID (svc-...).
+        # Sending an svc- id silently falls back to the API default ("shubh"), so guard
+        # against that here rather than making every caller remember it.
+        speaker = self._speaker
+        if speaker.startswith("svc-"):
+            logger.warning(
+                f"Speaker '{speaker}' looks like a Content Studio cloned voice ID, which "
+                f"the public TTS API does not support (falls back to default 'shubh'). "
+                f"Using '{DEFAULT_PRESET_SPEAKER}' instead."
+            )
+            speaker = DEFAULT_PRESET_SPEAKER
+        payload["speaker"] = speaker
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:

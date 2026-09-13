@@ -2,99 +2,467 @@
 <html>
 <head>
 <meta charset="utf-8" />
-<title>Workmate.IQ — HR (MVP)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WorkmateIQ — HR Console</title>
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; }
-  fieldset { margin-bottom: 24px; padding: 16px; }
-  label { display: block; margin: 8px 0 4px; }
-  input, select { width: 100%; padding: 6px; box-sizing: border-box; }
-  button { margin-top: 12px; padding: 8px 16px; cursor: pointer; }
-  pre { background: #f4f4f4; padding: 12px; overflow-x: auto; white-space: pre-wrap; }
-  a.room-link { display: inline-block; margin-top: 8px; }
+  :root {
+    --bg-a: #eef2ff; --bg-b: #f5f3ff; --card: #fff; --border: #e6e8f0; --text: #14162b; --muted: #6b7089;
+    --primary: #5b4fe8; --primary-dark: #4a3fd6; --primary-light: #efedfe;
+    --good: #16a37a; --good-bg: #e9fbf3; --warn: #e08b16; --bad: #e0435a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh; color: var(--text);
+    background: radial-gradient(1200px 700px at 15% -10%, #e3e0ff 0%, transparent 60%),
+                radial-gradient(1000px 600px at 110% 10%, #dceafe 0%, transparent 55%),
+                linear-gradient(180deg, var(--bg-a), var(--bg-b));
+    padding: 40px 16px 80px; display: flex; flex-direction: column; align-items: center;
+  }
+  .wrap { width: 100%; max-width: 820px; }
+
+  .brand { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 8px; }
+  .brand .logo {
+    width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(135deg,var(--primary),#8b7ff5);
+    display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 15px;
+    box-shadow: 0 4px 14px rgba(91,79,232,0.35);
+  }
+  .brand .name { font-weight: 800; font-size: 16px; letter-spacing: -0.01em; }
+  .subtitle { text-align: center; color: var(--muted); font-size: 14px; margin: 0 0 30px; }
+
+  /* Stepper */
+  .steps { display: flex; align-items: center; justify-content: center; gap: 6px; margin-bottom: 28px; }
+  .step-dot {
+    width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 800; background: #fff; border: 2px solid var(--border); color: var(--muted);
+    transition: all 0.2s;
+  }
+  .step-dot.active { border-color: var(--primary); color: var(--primary); box-shadow: 0 0 0 4px var(--primary-light); }
+  .step-dot.done { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .step-line { width: 36px; height: 2px; background: var(--border); }
+  .step-line.done { background: var(--primary); }
+
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 20px; padding: 26px;
+    box-shadow: 0 1px 2px rgba(20,22,43,0.04), 0 12px 32px -14px rgba(20,22,43,0.12);
+    margin-bottom: 20px; transition: opacity 0.2s;
+  }
+  .card.locked { opacity: 0.45; pointer-events: none; }
+  .card-title { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 800; margin-bottom: 6px; }
+  .card-title .num {
+    width: 26px; height: 26px; border-radius: 8px; background: var(--primary-light); color: var(--primary-dark);
+    display: flex; align-items: center; justify-content: center; font-size: 12.5px; font-weight: 800; flex-shrink: 0;
+  }
+  .card-sub { font-size: 13px; color: var(--muted); margin: 0 0 18px 36px; }
+
+  label { display: block; font-size: 12.5px; font-weight: 700; color: var(--muted); margin: 12px 0 6px; text-transform: uppercase; letter-spacing: 0.03em; }
+  input[type=text], input:not([type]), select {
+    width: 100%; padding: 11px 13px; border-radius: 10px; border: 1.5px solid var(--border);
+    font-size: 14px; background: #fafafc; transition: border-color 0.15s; font-family: inherit;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--primary); background: #fff; }
+  input[type=file] { width: 100%; font-size: 13px; margin-top: 2px; padding: 9px; border: 1.5px dashed var(--border); border-radius: 10px; background: #fafafc; }
+
+  .role-hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .role-type-badge {
+    display: inline-block; font-size: 11px; font-weight: 800; padding: 3px 9px; border-radius: 999px;
+    background: var(--primary-light); color: var(--primary-dark); margin-top: 8px; text-transform: capitalize;
+  }
+
+  button {
+    margin-top: 16px; padding: 11px 22px; cursor: pointer; border: none; border-radius: 11px;
+    background: linear-gradient(135deg,var(--primary),#7c6ef2); color: #fff; font-weight: 700; font-size: 13.5px;
+    box-shadow: 0 6px 18px -6px rgba(91,79,232,0.5); transition: transform 0.1s, box-shadow 0.15s;
+  }
+  button:hover:not(:disabled) { transform: translateY(-1px); }
+  button:disabled { background: #d3d5e6; box-shadow: none; cursor: not-allowed; display: inline-flex; align-items: center; gap: 8px; }
+  .spinner {
+    width: 13px; height: 13px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.5);
+    border-top-color: #fff; animation: spin 0.7s linear infinite; flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  button.secondary { background: #fff; color: var(--primary-dark); border: 1.5px solid var(--border); box-shadow: none; }
+
+  .msg { font-size: 13px; color: var(--muted); margin-top: 10px; }
+  .msg.ok { color: var(--good); font-weight: 600; }
+  .msg.err { color: var(--bad); font-weight: 600; }
+
+  .room-link-box {
+    margin-top: 16px; padding: 14px 16px; border-radius: 12px; background: var(--good-bg);
+    border: 1px solid #b7ecd8; display: none;
+  }
+  .room-link-box .lbl { font-size: 12px; font-weight: 700; color: #056a4f; text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 6px; }
+  .room-link-row { display: flex; gap: 8px; align-items: center; }
+  .room-link-row input {
+    flex: 1; font-size: 12.5px; background: #fff; border-color: #b7ecd8; color: #14532d;
+  }
+  .room-link-row button { margin-top: 0; padding: 9px 14px; white-space: nowrap; }
+  a.open-room {
+    display: inline-block; margin-top: 10px; color: var(--good); font-weight: 700; font-size: 13.5px; text-decoration: none;
+  }
+  a.open-room:hover { text-decoration: underline; }
+
+  /* Report */
+  .score-hero { display: flex; align-items: center; gap: 18px; margin-bottom: 18px; }
+  .score-ring { width: 84px; height: 84px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: 800; color: #fff; flex-shrink: 0; }
+  .score-hero .meta div:first-child { font-size: 16px; font-weight: 800; }
+  .score-hero .meta div:last-child { font-size: 13px; color: var(--muted); }
+  .rec-badge { display: inline-block; font-size: 12px; font-weight: 800; padding: 5px 13px; border-radius: 999px; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .overall-card { border: 1px solid var(--border); border-radius: 16px; padding: 20px 22px; margin: 16px 0 20px; background: linear-gradient(180deg,#fafaff,#fff); }
+  .overall-card .summary-text { font-size: 13.5px; line-height: 1.6; color: #374151; }
+  .rec-reason { font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+  .kg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 14px; }
+  @media (max-width: 560px) { .kg-grid { grid-template-columns: 1fr; } }
+  .kg-col h4 { font-size: 11.5px; margin: 0 0 6px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 800; }
+  .subtle-list { margin: 4px 0 0; padding-left: 18px; font-size: 12.5px; }
+  .subtle-list.good li { color: #056a4f; }
+  .subtle-list.bad li { color: #a2263a; }
+  .subtle-list li { margin-bottom: 3px; }
+  .comp-row { margin-bottom: 12px; }
+  .comp-row .top { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px; font-weight: 600; }
+  .comp-row .top .key { text-transform: capitalize; }
+  .bar-track { height: 8px; border-radius: 999px; background: #eef0f7; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 999px; transition: width 0.4s ease; }
+  .q-card { border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; margin-top: 14px; }
+  .q-card .q-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .q-card .q-text { font-weight: 700; font-size: 14px; }
+  .q-card .q-score { font-size: 13px; font-weight: 800; padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
+  .q-card .answer { margin-top: 10px; font-size: 13.5px; color: #374151; background: #f9fafc; border-radius: 10px; padding: 11px 13px; white-space: pre-wrap; max-height: 140px; overflow-y: auto; }
+  .q-card .explain { margin-top: 10px; font-size: 12.5px; color: var(--muted); font-style: italic; }
+  .subtle-label { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); margin-top: 10px; }
+  .dims { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .dim-pill { font-size: 11px; padding: 4px 9px; border-radius: 999px; background: #f3f4f8; color: #374151; font-weight: 600; }
+  .section-title { font-size: 14px; margin: 22px 0 4px; font-weight: 800; }
+  details.raw { margin-top: 18px; }
+  details.raw summary { cursor: pointer; font-size: 12px; color: var(--muted); font-weight: 600; }
+  details.raw pre { background: #f4f4f8; padding: 12px; border-radius: 10px; font-size: 11px; overflow-x: auto; }
 </style>
 </head>
 <body>
-<h1>Workmate.IQ — HR Console (MVP)</h1>
+<div class="wrap">
+  <div class="brand"><div class="logo">W</div><div class="name">WorkmateIQ</div></div>
+  <p class="subtitle">HR Console — set up and review AI-conducted interviews</p>
 
-<fieldset>
-  <legend>1. Create role</legend>
-  <label>Role name</label>
-  <input id="roleName" value="Backend Engineer" />
-  <button onclick="createRole()">Create role</button>
-  <pre id="roleOut"></pre>
-</fieldset>
+  <div class="steps">
+    <div class="step-dot active" id="dot1">1</div>
+    <div class="step-line" id="line1"></div>
+    <div class="step-dot" id="dot2">2</div>
+    <div class="step-line" id="line2"></div>
+    <div class="step-dot" id="dot3">3</div>
+    <div class="step-line" id="line3"></div>
+    <div class="step-dot" id="dot4">4</div>
+  </div>
 
-<fieldset>
-  <legend>2. Create candidate + upload resume</legend>
-  <label>Candidate name</label>
-  <input id="candName" value="Harshit Sharma" />
-  <label>Resume (PDF or .txt)</label>
-  <input id="resumeFile" type="file" />
-  <button onclick="createCandidate()">Create candidate + upload resume</button>
-  <pre id="candOut"></pre>
-</fieldset>
+  <div class="card" id="card1">
+    <div class="card-title"><span class="num">1</span> Create a role</div>
+    <div class="card-sub">Questions and scoring automatically adapt to the role — pick a common one below, or choose "Other" to type your own.</div>
+    <label>Role</label>
+    <select id="rolePreset">
+      <optgroup label="Technical">
+        <option value="Backend Engineer" selected>Backend Engineer</option>
+        <option value="Frontend Developer">Frontend Developer</option>
+        <option value="Full Stack Engineer">Full Stack Engineer</option>
+        <option value="DevOps Engineer">DevOps Engineer</option>
+        <option value="Data Scientist">Data Scientist</option>
+      </optgroup>
+      <optgroup label="Product & Support">
+        <option value="Product Manager">Product Manager</option>
+        <option value="Customer Support Executive">Customer Support Executive</option>
+      </optgroup>
+      <optgroup label="On-site / Blue-collar">
+        <option value="Factory Worker">Factory Worker</option>
+        <option value="Machine Operator">Machine Operator</option>
+        <option value="Warehouse Associate">Warehouse Associate</option>
+        <option value="Delivery Driver">Delivery Driver</option>
+        <option value="Electrician">Electrician</option>
+        <option value="Plumber">Plumber</option>
+        <option value="Welder">Welder</option>
+        <option value="Security Guard">Security Guard</option>
+        <option value="Housekeeping Staff">Housekeeping Staff</option>
+        <option value="Construction Worker">Construction Worker</option>
+      </optgroup>
+      <optgroup label="Other">
+        <option value="__custom__">Other (type your own)…</option>
+      </optgroup>
+    </select>
+    <div id="customRoleWrap" style="display:none">
+      <label>Custom role name</label>
+      <input id="roleName" value="Backend Engineer" />
+    </div>
+    <div class="role-hint" id="roleHint"></div>
+    <button id="createRoleBtn" onclick="createRole()">Create role</button>
+    <div id="roleMsg" class="msg"></div>
+  </div>
 
-<fieldset>
-  <legend>3. Create interview</legend>
-  <button onclick="createInterview()">Create interview</button>
-  <pre id="interviewOut"></pre>
-  <a id="candidateLink" class="room-link" style="display:none" target="_blank">Open candidate interview room →</a>
-</fieldset>
+  <div class="card locked" id="card2">
+    <div class="card-title"><span class="num">2</span> Add the candidate</div>
+    <div class="card-sub">A resume is optional — if you add one, one interview question will be built around it.</div>
+    <label>Candidate name</label>
+    <input id="candName" value="Harshit Sharma" />
+    <label>Resume (PDF or .txt) — optional</label>
+    <input id="resumeFile" type="file" />
+    <button id="createCandidateBtn" onclick="createCandidate()">Create candidate</button>
+    <div id="candMsg" class="msg"></div>
+  </div>
 
-<fieldset>
-  <legend>4. Get report (after interview completes)</legend>
-  <button onclick="getReport()">Fetch report</button>
-  <pre id="reportOut"></pre>
-</fieldset>
+  <div class="card locked" id="card3">
+    <div class="card-title"><span class="num">3</span> Create the interview</div>
+    <div class="card-sub">Generates a tailored question plan and a link you can send the candidate.</div>
+    <button id="createInterviewBtn" onclick="createInterview()">Create interview</button>
+    <div id="interviewMsg" class="msg"></div>
+    <div class="room-link-box" id="roomLinkBox">
+      <div class="lbl">Candidate interview link</div>
+      <div class="room-link-row">
+        <input id="roomLinkInput" readonly />
+        <button class="secondary" onclick="copyRoomLink()">Copy</button>
+      </div>
+      <a id="candidateLink" class="open-room" target="_blank">Open candidate interview room →</a>
+    </div>
+  </div>
+
+  <div class="card locked" id="card4">
+    <div class="card-title"><span class="num">4</span> Interview report</div>
+    <div class="card-sub">Available as soon as the candidate finishes (or the interview ends early). The candidate also sees this automatically at the end of their session.</div>
+    <button onclick="getReport()">Fetch report</button>
+    <div id="reportMsg" class="msg"></div>
+    <div id="reportView"></div>
+  </div>
+</div>
 
 <script>
-let roleId, candidateId, interviewId;
+let roleId, candidateId, interviewId, roleTypeGuess = "general";
 
-async function createRole() {
-  const fd = new FormData();
-  fd.append("name", document.getElementById("roleName").value);
-  const res = await fetch("/v1/roles", { method: "POST", body: fd });
-  const data = await res.json();
-  roleId = data.id;
-  document.getElementById("roleOut").textContent = JSON.stringify(data, null, 2);
+const PLAIN_LANGUAGE_HINT_WORDS = ["factory", "worker", "operator", "driver", "electrician", "plumber", "welder",
+  "technician", "mechanic", "warehouse", "labourer", "laborer", "loader", "packer", "guard", "carpenter", "mason"];
+
+function unlockCard(n) {
+  document.getElementById(`card${n}`).classList.remove("locked");
+  for (let i = 1; i < n; i++) {
+    document.getElementById(`dot${i}`).classList.add("done");
+    document.getElementById(`dot${i}`).textContent = "✓";
+    const line = document.getElementById(`line${i}`);
+    if (line) line.classList.add("done");
+  }
+  document.getElementById(`dot${n}`).classList.add("active");
 }
 
-async function createCandidate() {
-  const fd = new FormData();
-  fd.append("name", document.getElementById("candName").value);
-  const res = await fetch("/v1/candidates", { method: "POST", body: fd });
-  const data = await res.json();
-  candidateId = data.id;
+function updateRoleHint(name) {
+  const v = name.toLowerCase();
+  const hint = document.getElementById("roleHint");
+  const plain = PLAIN_LANGUAGE_HINT_WORDS.some(w => v.includes(w));
+  hint.innerHTML = plain
+    ? '<span class="role-type-badge">Plain-language mode</span> Simple vocabulary, safety/reliability-focused questions.'
+    : "";
+}
 
-  const file = document.getElementById("resumeFile").files[0];
-  if (file) {
-    const fd2 = new FormData();
-    fd2.append("file", file);
-    const res2 = await fetch(`/v1/candidates/${candidateId}/resume`, { method: "POST", body: fd2 });
-    const data2 = await res2.json();
-    document.getElementById("candOut").textContent = JSON.stringify(data2, null, 2);
+function getSelectedRoleName() {
+  const preset = document.getElementById("rolePreset").value;
+  return preset === "__custom__" ? document.getElementById("roleName").value : preset;
+}
+
+document.getElementById("rolePreset").addEventListener("change", (e) => {
+  const isCustom = e.target.value === "__custom__";
+  document.getElementById("customRoleWrap").style.display = isCustom ? "block" : "none";
+  updateRoleHint(getSelectedRoleName());
+});
+document.getElementById("roleName").addEventListener("input", (e) => updateRoleHint(e.target.value));
+updateRoleHint(getSelectedRoleName());
+
+function setMsg(el, text, kind = "") {
+  el.className = "msg" + (kind ? " " + kind : "");
+  el.textContent = text;
+}
+
+function setBusy(btn, busy, busyLabel) {
+  if (busy) {
+    btn.dataset.originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner"></span>${busyLabel}`;
   } else {
-    document.getElementById("candOut").textContent = JSON.stringify(data, null, 2);
+    btn.disabled = false;
+    btn.textContent = btn.dataset.originalLabel || btn.textContent;
   }
 }
 
+async function createRole() {
+  const el = document.getElementById("roleMsg");
+  const btn = document.getElementById("createRoleBtn");
+  const name = getSelectedRoleName();
+  if (!name.trim()) { setMsg(el, "Please enter a role name.", "err"); return; }
+  const fd = new FormData();
+  fd.append("name", name);
+  setBusy(btn, true, "Creating role...");
+  try {
+    const res = await fetch("/v1/roles", { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "failed");
+    roleId = data.id;
+    setMsg(el, `Role created: ${data.name} — ${data.competencies.length} competencies configured.`, "ok");
+    unlockCard(2);
+  } catch (e) { setMsg(el, "Error: " + e.message, "err"); }
+  finally { setBusy(btn, false); }
+}
+
+async function createCandidate() {
+  const el = document.getElementById("candMsg");
+  const btn = document.getElementById("createCandidateBtn");
+  const fd = new FormData();
+  fd.append("name", document.getElementById("candName").value);
+  setBusy(btn, true, "Creating candidate...");
+  try {
+    const res = await fetch("/v1/candidates", { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "failed");
+    candidateId = data.id;
+
+    const file = document.getElementById("resumeFile").files[0];
+    if (file) {
+      setBusy(btn, true, "Parsing resume...");
+      const fd2 = new FormData();
+      fd2.append("file", file);
+      const res2 = await fetch(`/v1/candidates/${candidateId}/resume`, { method: "POST", body: fd2 });
+      const data2 = await res2.json();
+      if (!res2.ok) throw new Error(data2.detail || "resume upload failed");
+      setMsg(el, `Candidate created (${data.name}) — resume parsed: ${(data2.evidence_profile?.skills || []).length} skills found`, "ok");
+    } else {
+      setMsg(el, `Candidate created: ${data.name} — no resume uploaded`, "ok");
+    }
+    unlockCard(3);
+  } catch (e) { setMsg(el, "Error: " + e.message, "err"); }
+  finally { setBusy(btn, false); }
+}
+
 async function createInterview() {
+  const el = document.getElementById("interviewMsg");
+  const btn = document.getElementById("createInterviewBtn");
+  if (!candidateId || !roleId) { setMsg(el, "Complete steps 1 and 2 first.", "err"); return; }
+  setBusy(btn, true, "Generating tailored questions...");
   const fd = new FormData();
   fd.append("candidate_id", candidateId);
   fd.append("role_id", roleId);
-  const res = await fetch("/v1/interviews", { method: "POST", body: fd });
-  const data = await res.json();
-  interviewId = data.id;
-  document.getElementById("interviewOut").textContent = JSON.stringify(data, null, 2);
-  const link = document.getElementById("candidateLink");
-  link.href = `/static/room.html?interview_id=${interviewId}`;
-  link.style.display = "inline-block";
+  try {
+    const res = await fetch("/v1/interviews", { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "failed");
+    interviewId = data.id;
+    setMsg(el, `Interview created with ${data.plan.questions.length} questions planned.`, "ok");
+    const link = `${window.location.origin}/static/room.html?interview_id=${interviewId}`;
+    document.getElementById("roomLinkInput").value = link;
+    document.getElementById("candidateLink").href = link;
+    document.getElementById("roomLinkBox").style.display = "block";
+    unlockCard(4);
+  } catch (e) { setMsg(el, "Error: " + e.message, "err"); }
+  finally { setBusy(btn, false); }
+}
+
+function copyRoomLink() {
+  const input = document.getElementById("roomLinkInput");
+  input.select();
+  navigator.clipboard?.writeText(input.value).catch(() => document.execCommand("copy"));
+}
+
+function scoreColor(score) {
+  if (score >= 75) return "#16a37a";
+  if (score >= 50) return "#e08b16";
+  return "#e0435a";
+}
+
+function listHtml(items, cls) {
+  if (!items || !items.length) return "";
+  return `<ul class="subtle-list ${cls}">${items.map(i => `<li>${escapeHtml(i)}</li>`).join("")}</ul>`;
+}
+
+function renderReport(data) {
+  const view = document.getElementById("reportView");
+  const finalScore = Math.round(data.final_score || 0);
+  const color = scoreColor(finalScore);
+  const content = data.content || {};
+  const questions = content.questions || [];
+
+  let compRows = "";
+  for (const [key, val] of Object.entries(data.competency_scores || {})) {
+    const v = Math.round(val);
+    compRows += `
+      <div class="comp-row">
+        <div class="top"><span class="key">${key.replace(/_/g, " ")}</span><span>${v}/100</span></div>
+        <div class="bar-track"><div class="bar-fill" style="width:${v}%;background:${scoreColor(v)}"></div></div>
+      </div>`;
+  }
+
+  let qCards = "";
+  for (const q of questions) {
+    const cScore = Math.round(q.content_score?.score ?? 0);
+    const dims = q.content_score?.dimensions || {};
+    const dimPills = Object.entries(dims).map(([k, v]) => `<span class="dim-pill">${k.replace(/_/g, " ")}: ${Math.round(v)}</span>`).join("");
+    qCards += `
+      <div class="q-card">
+        <div class="q-header">
+          <div class="q-text">${escapeHtml(q.question)}</div>
+          <div class="q-score" style="background:${scoreColor(cScore)}22;color:${scoreColor(cScore)}">${cScore}/100</div>
+        </div>
+        <div class="answer">${escapeHtml(q.candidate_answer)}</div>
+        <div class="dims">${dimPills}</div>
+        ${q.content_score?.explanation ? `<div class="explain">"${escapeHtml(q.content_score.explanation)}"</div>` : ""}
+        ${q.content_score?.strengths?.length ? `<div class="subtle-label">Strengths</div>${listHtml(q.content_score.strengths, "good")}` : ""}
+        ${q.content_score?.improvement_areas?.length ? `<div class="subtle-label">Could improve</div>${listHtml(q.content_score.improvement_areas, "bad")}` : ""}
+        ${q.communication_score?.explanation ? `<div class="subtle-label">Communication</div><div class="explain" style="font-style:normal;">${escapeHtml(q.communication_score.explanation)} (${Math.round(q.communication_score.score ?? 0)}/100)</div>` : ""}
+      </div>`;
+  }
+
+  const overall = content.overall || {};
+  const recColors = { strong_hire: "#056a4f", hire: "#166534", borderline: "#92400e", no_hire: "#a2263a" };
+  const recLabels = { strong_hire: "Strong Hire", hire: "Hire", borderline: "Borderline", no_hire: "No Hire" };
+  const recColor = recColors[overall.recommendation] || "#374151";
+  const overallHtml = overall.summary ? `
+    <div class="overall-card">
+      ${overall.recommendation ? `<div class="rec-badge" style="background:${recColor}22;color:${recColor}">${recLabels[overall.recommendation] || overall.recommendation}</div>` : ""}
+      <div class="summary-text">${escapeHtml(overall.summary)}</div>
+      ${overall.recommendation_reason ? `<div class="rec-reason">${escapeHtml(overall.recommendation_reason)}</div>` : ""}
+      <div class="kg-grid">
+        <div class="kg-col"><h4 style="color:#056a4f;">Key strengths</h4>${listHtml(overall.key_strengths, "good")}</div>
+        <div class="kg-col"><h4 style="color:#a2263a;">Key gaps</h4>${listHtml(overall.key_gaps, "bad")}</div>
+      </div>
+    </div>` : "";
+
+  view.innerHTML = `
+    <div class="score-hero">
+      <div class="score-ring" style="background:${color}">${finalScore}</div>
+      <div class="meta">
+        <div>${escapeHtml(content.candidate || "Candidate")} — ${escapeHtml(content.role || "")}</div>
+        <div>Overall score out of 100</div>
+      </div>
+    </div>
+    ${overallHtml}
+    ${compRows}
+    <div class="section-title">Per-question breakdown</div>
+    ${qCards || '<div class="msg">No scored answers yet.</div>'}
+    <details class="raw"><summary>Raw JSON</summary><pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre></details>
+  `;
+}
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 async function getReport() {
-  const res = await fetch(`/v1/interviews/${interviewId}/report`);
-  const data = await res.json();
-  document.getElementById("reportOut").textContent = JSON.stringify(data, null, 2);
+  const el = document.getElementById("reportMsg");
+  const view = document.getElementById("reportView");
+  if (!interviewId) { setMsg(el, "Create an interview first (step 3).", "err"); return; }
+  setMsg(el, "Fetching...");
+  view.innerHTML = "";
+  try {
+    const res = await fetch(`/v1/interviews/${interviewId}/report`);
+    const data = await res.json();
+    if (!res.ok) {
+      setMsg(el, data.detail === "no report yet"
+        ? "No report yet — the interview must finish first. The candidate will also see it appear automatically the moment they finish."
+        : ("Error: " + (data.detail || "failed")), "err");
+      return;
+    }
+    setMsg(el, "Report loaded.", "ok");
+    renderReport(data);
+  } catch (e) { setMsg(el, "Error: " + e.message, "err"); }
 }
 </script>
 </body>

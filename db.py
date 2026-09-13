@@ -20,6 +20,11 @@ class Role(Base):
     id = Column(String, primary_key=True, default=lambda: gen_id("role"))
     name = Column(String, nullable=False)
     competencies = Column(JSON, nullable=False)  # [{"key": "...", "weight": 0.3}, ...]
+    # LLM-generated scenario questions tailored to this exact role title, generated once and
+    # reused for every candidate who interviews for it — every candidate for the same role gets
+    # the same questions, which is what makes their scores fairly comparable to each other.
+    # (Regenerating fresh questions per-candidate would make cross-candidate comparison unfair.)
+    generated_questions = Column(JSON, nullable=True)
 
 
 class Candidate(Base):
@@ -84,6 +89,16 @@ class Report(Base):
 
 def init_db():
     Base.metadata.create_all(engine)
+    # create_all only creates missing tables, not missing columns on an existing table — patch
+    # in any new columns by hand. Only needed for the legacy sqlite file this repo used to ship
+    # with; a fresh Postgres database already gets the column from create_all above.
+    if engine.dialect.name == "sqlite":
+        with engine.connect() as conn:
+            from sqlalchemy import text
+            existing_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(roles)"))}
+            if "generated_questions" not in existing_cols:
+                conn.execute(text("ALTER TABLE roles ADD COLUMN generated_questions JSON"))
+                conn.commit()
 
 
 def get_db():

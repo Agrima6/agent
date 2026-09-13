@@ -2,39 +2,435 @@
 <html>
 <head>
 <meta charset="utf-8" />
-<title>Workmate.IQ — Candidate Interview</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WorkmateIQ — Interview</title>
 <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
 <style>
-  body { font-family: system-ui, -apple-system, sans-serif; max-width: 520px; margin: 60px auto; text-align: center; color: #1e293b; }
-  h1 { font-size: 28px; margin-bottom: 8px; }
-  p { color: #64748b; font-size: 15px; margin-bottom: 24px; }
-  button { padding: 12px 28px; font-size: 16px; font-weight: 600; cursor: pointer; border-radius: 8px; border: none; background: #2563eb; color: #fff; transition: background 0.2s; }
-  button:hover:not(:disabled) { background: #1d4ed8; }
-  button:disabled { background: #94a3b8; cursor: not-allowed; }
-  #status-container { margin-top: 24px; padding: 16px; border-radius: 8px; background: #f8fafc; border: 1px solid #e2e8f0; }
-  #status { font-size: 15px; color: #334155; font-weight: 500; }
-  .pulse-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #10b981; margin-right: 8px; animation: pulse 1.5s infinite; }
-  @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
+  :root {
+    --bg-a: #eef2ff; --bg-b: #f5f3ff; --card: #ffffff; --border: #e6e8f0; --text: #14162b; --muted: #6b7089;
+    --primary: #5b4fe8; --primary-dark: #4a3fd6; --primary-light: #efedfe;
+    --agent-bubble: #f1f0ff; --agent-text: #392f8f; --cand-bubble: linear-gradient(135deg,#5b4fe8,#7c6ef2);
+    --good: #16a37a; --good-bg: #e9fbf3; --warn: #e08b16; --bad: #e0435a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh; color: var(--text);
+    background: radial-gradient(1200px 700px at 15% -10%, #e3e0ff 0%, transparent 60%),
+                radial-gradient(1000px 600px at 110% 10%, #dceafe 0%, transparent 55%),
+                linear-gradient(180deg, var(--bg-a), var(--bg-b));
+    display: flex; flex-direction: column; align-items: center; padding: 40px 16px 70px;
+  }
+  .wrap { width: 100%; max-width: 760px; }
+
+  .brand { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 22px; }
+  .brand .logo {
+    width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(135deg,var(--primary),#8b7ff5);
+    display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 15px;
+    box-shadow: 0 4px 14px rgba(91,79,232,0.35);
+  }
+  .brand .name { font-weight: 800; font-size: 16px; letter-spacing: -0.01em; }
+
+  .header { text-align: center; margin-bottom: 26px; }
+  .header h1 { font-size: 28px; margin: 0 0 6px; font-weight: 800; letter-spacing: -0.02em; }
+  .header p { color: var(--muted); font-size: 14.5px; margin: 0; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 20px; padding: 24px;
+    box-shadow: 0 1px 2px rgba(20,22,43,0.04), 0 12px 32px -14px rgba(20,22,43,0.12);
+  }
+
+  .lang-picker { margin-bottom: 20px; }
+  .lang-picker .lang-label { font-size: 12.5px; font-weight: 700; color: var(--muted); margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .lang-options { display: flex; gap: 8px; background: #f6f6fb; padding: 5px; border-radius: 14px; }
+  .lang-opt {
+    flex: 1; text-align: center; padding: 10px 8px; border-radius: 10px; cursor: pointer;
+    font-size: 13.5px; font-weight: 700; color: var(--muted); transition: all 0.15s;
+  }
+  .lang-opt:hover { color: var(--text); }
+  .lang-opt.selected { background: #fff; color: var(--primary-dark); box-shadow: 0 2px 8px rgba(20,22,43,0.08); }
+  .lang-opt .sub { display: block; font-weight: 500; font-size: 11px; margin-top: 2px; opacity: 0.7; }
+
+  .controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
+
+  button#joinBtn {
+    padding: 13px 26px; font-size: 15px; font-weight: 700; cursor: pointer; border-radius: 12px;
+    border: none; background: linear-gradient(135deg,var(--primary),#7c6ef2); color: #fff;
+    transition: transform 0.1s, box-shadow 0.15s; box-shadow: 0 6px 18px -6px rgba(91,79,232,0.55);
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  button#joinBtn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 8px 22px -6px rgba(91,79,232,0.6); }
+  button#joinBtn:active:not(:disabled) { transform: translateY(0); }
+  button#joinBtn:disabled { background: #d3d5e6; box-shadow: none; cursor: not-allowed; }
+
+  #doneSpeakingBtn {
+    padding: 11px 18px; font-size: 13.5px; font-weight: 700; cursor: pointer; border-radius: 12px;
+    border: 1.5px solid var(--border); background: #fff; color: var(--primary-dark);
+    transition: all 0.12s;
+  }
+  #doneSpeakingBtn:hover { border-color: var(--primary); background: var(--primary-light); }
+
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600;
+    color: var(--muted); padding: 7px 14px; border-radius: 999px; background: #f6f6fb;
+  }
+  .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); animation: pulse 1.5s infinite; }
+  .speaking-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); animation: pulse 0.8s infinite; }
+  @keyframes pulse { 0% { opacity: 0.35; transform: scale(0.85);} 50% { opacity: 1; transform: scale(1);} 100% { opacity: 0.35; transform: scale(0.85);} }
+
+  #transcript {
+    display: flex; flex-direction: column; gap: 12px; max-height: 56vh; overflow-y: auto;
+    padding: 6px 2px; scroll-behavior: smooth;
+  }
+  #transcript:empty::before {
+    content: "The conversation will appear here once the interview starts.";
+    color: var(--muted); font-size: 14px; text-align: center; padding: 50px 20px; display: block;
+  }
+  .bubble-row { display: flex; align-items: flex-end; gap: 8px; }
+  .bubble-row.candidate { justify-content: flex-end; }
+  .bubble-row.agent { justify-content: flex-start; }
+  .avatar {
+    width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center;
+    justify-content: center; font-size: 12px; font-weight: 800; color: #fff;
+  }
+  .avatar.agent { background: linear-gradient(135deg,var(--primary),#8b7ff5); }
+  .avatar.candidate { background: linear-gradient(135deg,#374151,#6b7280); }
+  .bubble {
+    max-width: 74%; padding: 11px 15px; border-radius: 16px; font-size: 14.5px; line-height: 1.48;
+    white-space: pre-wrap; word-break: break-word; animation: fadeIn 0.2s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+  .listening-bubble { display: flex; align-items: center; gap: 5px; padding: 4px 2px; }
+  .listening-bubble .dot {
+    width: 6px; height: 6px; border-radius: 50%; background: #9ca3af; animation: bounce 1.2s infinite;
+  }
+  .listening-bubble .dot:nth-child(2) { animation-delay: 0.15s; }
+  .listening-bubble .dot:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.5; } 30% { transform: translateY(-4px); opacity: 1; } }
+  .bubble.agent { background: var(--agent-bubble); color: var(--agent-text); border-bottom-left-radius: 5px; }
+  .bubble.candidate { background: var(--cand-bubble); color: #fff; border-bottom-right-radius: 5px; }
+  .bubble .label { display: block; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.65; margin-bottom: 3px; }
+  .bubble.interim { opacity: 0.55; font-style: italic; }
+
+  /* Completion + report */
+  #completeSection { display: none; }
+  .thankyou-card {
+    text-align: center; padding: 40px 24px; margin-bottom: 20px;
+  }
+  .thankyou-card .check {
+    width: 64px; height: 64px; border-radius: 50%; background: var(--good-bg); color: var(--good);
+    display: flex; align-items: center; justify-content: center; margin: 0 auto 18px; font-size: 30px;
+  }
+  .thankyou-card h2 { font-size: 22px; margin: 0 0 8px; font-weight: 800; }
+  .thankyou-card p { color: var(--muted); font-size: 14.5px; margin: 0; max-width: 420px; margin: 0 auto; }
+  .report-status { text-align: center; color: var(--muted); font-size: 13.5px; padding: 18px 0; }
+
+  .score-hero { display: flex; align-items: center; gap: 18px; margin-bottom: 18px; }
+  .score-ring { width: 84px; height: 84px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: 800; color: #fff; flex-shrink: 0; }
+  .score-hero .meta div:first-child { font-size: 16px; font-weight: 800; }
+  .score-hero .meta div:last-child { font-size: 13px; color: var(--muted); }
+
+  .rec-badge { display: inline-block; font-size: 12px; font-weight: 800; padding: 5px 13px; border-radius: 999px; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .overall-card { border: 1px solid var(--border); border-radius: 16px; padding: 20px 22px; margin: 16px 0 20px; background: linear-gradient(180deg,#fafaff,#fff); }
+  .overall-card .summary-text { font-size: 13.5px; line-height: 1.6; color: #374151; }
+  .rec-reason { font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+  .kg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 14px; }
+  @media (max-width: 560px) { .kg-grid { grid-template-columns: 1fr; } }
+  .kg-col h4 { font-size: 11.5px; margin: 0 0 6px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 800; }
+  .subtle-list { margin: 4px 0 0; padding-left: 18px; font-size: 12.5px; }
+  .subtle-list.good li { color: #056a4f; }
+  .subtle-list.bad li { color: #a2263a; }
+  .subtle-list li { margin-bottom: 3px; }
+
+  .comp-row { margin-bottom: 12px; }
+  .comp-row .top { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px; font-weight: 600; }
+  .comp-row .top .key { text-transform: capitalize; }
+  .bar-track { height: 8px; border-radius: 999px; background: #eef0f7; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 999px; transition: width 0.4s ease; }
+
+  .q-card { border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; margin-top: 14px; }
+  .q-card .q-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .q-card .q-text { font-weight: 700; font-size: 14px; }
+  .q-card .q-score { font-size: 13px; font-weight: 800; padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
+  .q-card .answer { margin-top: 10px; font-size: 13.5px; color: #374151; background: #f9fafc; border-radius: 10px; padding: 11px 13px; white-space: pre-wrap; max-height: 140px; overflow-y: auto; }
+  .q-card .explain { margin-top: 10px; font-size: 12.5px; color: var(--muted); font-style: italic; }
+  .subtle-label { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); margin-top: 10px; }
+  .dims { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .dim-pill { font-size: 11px; padding: 4px 9px; border-radius: 999px; background: #f3f4f8; color: #374151; font-weight: 600; }
+  .section-title { font-size: 14px; margin: 22px 0 4px; font-weight: 800; }
+  .disclosure { font-size: 12px; color: var(--muted); text-align: center; margin: 14px 8px 0; line-height: 1.5; }
+  .interview-meta {
+    display: inline-flex; align-items: center; gap: 14px; margin-top: 14px; padding: 8px 18px;
+    border-radius: 999px; background: #fff; border: 1px solid var(--border); font-size: 12.5px;
+    font-weight: 600; color: var(--muted);
+  }
+  .interview-meta b { color: var(--text); font-weight: 800; }
+  .interview-meta .sep { width: 4px; height: 4px; border-radius: 50%; background: var(--border); }
 </style>
 </head>
 <body>
-<h1>Your AI Interview</h1>
-<p>Make sure your microphone is enabled, then click below when ready.</p>
-<button id="joinBtn">Join Interview</button>
-<div id="status-container" style="display:none">
-  <div id="status"></div>
+<div class="wrap">
+  <div class="brand"><div class="logo">W</div><div class="name">WorkmateIQ</div></div>
+
+  <div id="joinSection">
+    <div class="header">
+      <h1>Your AI Interview</h1>
+      <p id="headerSub">Make sure your microphone is enabled, then click below when ready.</p>
+      <div id="interviewMeta" class="interview-meta" style="display:none"></div>
+    </div>
+
+    <div class="card">
+      <div class="lang-picker">
+        <div class="lang-label">Interview language</div>
+        <div class="lang-options" id="langOptions">
+          <div class="lang-opt selected" data-lang="en">English<span class="sub">English</span></div>
+          <div class="lang-opt" data-lang="hi">Hindi<span class="sub">हिन्दी</span></div>
+          <div class="lang-opt" data-lang="hinglish">Hinglish<span class="sub">Hindi + English mix</span></div>
+        </div>
+      </div>
+      <div class="controls">
+        <button id="joinBtn">🎙️ Join Interview</button>
+        <button id="doneSpeakingBtn" class="secondary-btn" style="display:none">✅ Done speaking</button>
+        <span id="statusPill" class="status-pill" style="display:none"></span>
+      </div>
+      <div id="transcript"></div>
+    </div>
+    <p class="disclosure">This interview is conducted and automatically scored by an AI interviewer. Your voice is transcribed for that purpose. You can ask to skip a question or end the interview at any time.</p>
+  </div>
+
+  <div id="completeSection">
+    <div class="card thankyou-card">
+      <div class="check">✓</div>
+      <h2>Thank you, your interview is complete!</h2>
+      <p>We really appreciate the time you took today. Your results are ready below.</p>
+    </div>
+    <div class="card" id="reportCard">
+      <div class="report-status" id="reportStatus">Preparing your report…</div>
+      <div id="reportView"></div>
+    </div>
+  </div>
 </div>
 
 <script>
 const params = new URLSearchParams(window.location.search);
 const interviewId = params.get("interview_id");
-const statusContainer = document.getElementById("status-container");
-const statusEl = document.getElementById("status");
+const statusPill = document.getElementById("statusPill");
 const joinBtn = document.getElementById("joinBtn");
+const doneSpeakingBtn = document.getElementById("doneSpeakingBtn");
+const transcriptEl = document.getElementById("transcript");
+const langOptions = document.getElementById("langOptions");
+const joinSection = document.getElementById("joinSection");
+const completeSection = document.getElementById("completeSection");
+const reportStatus = document.getElementById("reportStatus");
+const reportView = document.getElementById("reportView");
 
-function setStatus(text, showPulse = false) {
-  statusContainer.style.display = "block";
-  statusEl.innerHTML = (showPulse ? '<span class="pulse-dot"></span>' : '') + text;
+// Show who/what this interview is for up front — makes it read as a real, structured
+// interview with a defined scope rather than an open-ended chat window.
+(async () => {
+  if (!interviewId) return;
+  try {
+    const res = await fetch(`/v1/interviews/${interviewId}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const qCount = (data.plan?.questions || []).filter(q => q.question_text).length;
+    const metaEl = document.getElementById("interviewMeta");
+    metaEl.innerHTML = `<b>${escapeHtml(data.role || "Interview")}</b><span class="sep"></span>${qCount} questions`;
+    metaEl.style.display = "inline-flex";
+  } catch (e) { /* non-critical */ }
+})();
+
+let selectedLanguage = "en";
+langOptions.addEventListener("click", (e) => {
+  const opt = e.target.closest(".lang-opt");
+  if (!opt || joinBtn.disabled) return;
+  selectedLanguage = opt.dataset.lang;
+  langOptions.querySelectorAll(".lang-opt").forEach(el => el.classList.toggle("selected", el === opt));
+});
+
+function setStatus(text, kind = "idle") {
+  statusPill.style.display = "inline-flex";
+  const dot = kind === "connected" ? '<span class="pulse-dot"></span>'
+            : kind === "speaking" ? '<span class="speaking-dot"></span>' : "";
+  statusPill.innerHTML = dot + text;
+}
+
+const interimBubbles = {};
+let listeningRow = null;
+
+// Groq's Whisper STT only returns a FINAL transcript once you stop talking — there's no live
+// word-by-word captioning. To keep the interview feeling alive while you're mid-answer (rather
+// than looking frozen), show an animated "listening" bubble instead of literal live text.
+function showListeningBubble() {
+  if (listeningRow) return;
+  listeningRow = document.createElement("div");
+  listeningRow.className = "bubble-row candidate";
+  listeningRow.innerHTML = `
+    <div class="bubble candidate listening-bubble">
+      <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+    </div>
+    <div class="avatar candidate">🧑</div>`;
+  transcriptEl.appendChild(listeningRow);
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+function hideListeningBubble() {
+  if (listeningRow) { listeningRow.remove(); listeningRow = null; }
+}
+
+function appendBubble(speaker, text, { interim = false } = {}) {
+  hideListeningBubble();
+  const row = document.createElement("div");
+  row.className = `bubble-row ${speaker}`;
+  const avatar = document.createElement("div");
+  avatar.className = `avatar ${speaker}`;
+  avatar.textContent = speaker === "agent" ? "🤖" : "🧑";
+  const bubble = document.createElement("div");
+  bubble.className = `bubble ${speaker}` + (interim ? " interim" : "");
+  const label = document.createElement("span");
+  label.className = "label";
+  label.textContent = speaker === "agent" ? "Interviewer" : "You";
+  bubble.appendChild(label);
+  bubble.appendChild(document.createTextNode(text));
+  if (speaker === "agent") { row.appendChild(avatar); row.appendChild(bubble); }
+  else { row.appendChild(bubble); row.appendChild(avatar); }
+  transcriptEl.appendChild(row);
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  return row;
+}
+
+function upsertTranscript(speaker, text, { final = true, segmentId = null } = {}) {
+  if (!text || !text.trim()) return;
+  const key = segmentId || speaker;
+  if (!final) {
+    if (interimBubbles[key]) {
+      interimBubbles[key].querySelector(".bubble").lastChild.textContent = " " + text;
+    } else {
+      interimBubbles[key] = appendBubble(speaker, text, { interim: true });
+    }
+  } else {
+    if (interimBubbles[key]) {
+      const bubble = interimBubbles[key].querySelector(".bubble");
+      bubble.classList.remove("interim");
+      bubble.lastChild.textContent = " " + text;
+      delete interimBubbles[key];
+    } else {
+      appendBubble(speaker, text);
+    }
+  }
+}
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function scoreColor(score) {
+  if (score >= 75) return "#16a37a";
+  if (score >= 50) return "#e08b16";
+  return "#e0435a";
+}
+
+function listHtml(items, cls) {
+  if (!items || !items.length) return "";
+  return `<ul class="subtle-list ${cls}">${items.map(i => `<li>${escapeHtml(i)}</li>`).join("")}</ul>`;
+}
+
+function renderReport(data) {
+  const finalScore = Math.round(data.final_score || 0);
+  const color = scoreColor(finalScore);
+  const content = data.content || {};
+  const questions = content.questions || [];
+
+  let compRows = "";
+  for (const [key, val] of Object.entries(data.competency_scores || {})) {
+    const v = Math.round(val);
+    compRows += `
+      <div class="comp-row">
+        <div class="top"><span class="key">${key.replace(/_/g, " ")}</span><span>${v}/100</span></div>
+        <div class="bar-track"><div class="bar-fill" style="width:${v}%;background:${scoreColor(v)}"></div></div>
+      </div>`;
+  }
+
+  let qCards = "";
+  for (const q of questions) {
+    const cScore = Math.round(q.content_score?.score ?? 0);
+    const dims = q.content_score?.dimensions || {};
+    const dimPills = Object.entries(dims).map(([k, v]) => `<span class="dim-pill">${k.replace(/_/g, " ")}: ${Math.round(v)}</span>`).join("");
+    qCards += `
+      <div class="q-card">
+        <div class="q-header">
+          <div class="q-text">${escapeHtml(q.question)}</div>
+          <div class="q-score" style="background:${scoreColor(cScore)}22;color:${scoreColor(cScore)}">${cScore}/100</div>
+        </div>
+        <div class="answer">${escapeHtml(q.candidate_answer)}</div>
+        <div class="dims">${dimPills}</div>
+        ${q.content_score?.explanation ? `<div class="explain">"${escapeHtml(q.content_score.explanation)}"</div>` : ""}
+        ${q.content_score?.strengths?.length ? `<div class="subtle-label">Strengths</div>${listHtml(q.content_score.strengths, "good")}` : ""}
+        ${q.content_score?.improvement_areas?.length ? `<div class="subtle-label">Could improve</div>${listHtml(q.content_score.improvement_areas, "bad")}` : ""}
+      </div>`;
+  }
+
+  const overall = content.overall || {};
+  const recColors = { strong_hire: "#056a4f", hire: "#166534", borderline: "#92400e", no_hire: "#a2263a" };
+  const recLabels = { strong_hire: "Strong Hire", hire: "Hire", borderline: "Borderline", no_hire: "No Hire" };
+  const recColor = recColors[overall.recommendation] || "#374151";
+  const overallHtml = overall.summary ? `
+    <div class="overall-card">
+      ${overall.recommendation ? `<div class="rec-badge" style="background:${recColor}22;color:${recColor}">${recLabels[overall.recommendation] || overall.recommendation}</div>` : ""}
+      <div class="summary-text">${escapeHtml(overall.summary)}</div>
+      ${overall.recommendation_reason ? `<div class="rec-reason">${escapeHtml(overall.recommendation_reason)}</div>` : ""}
+      <div class="kg-grid">
+        <div class="kg-col"><h4 style="color:#056a4f;">Key strengths</h4>${listHtml(overall.key_strengths, "good")}</div>
+        <div class="kg-col"><h4 style="color:#a2263a;">Key gaps</h4>${listHtml(overall.key_gaps, "bad")}</div>
+      </div>
+    </div>` : "";
+
+  reportView.innerHTML = `
+    <div class="score-hero">
+      <div class="score-ring" style="background:${color}">${finalScore}</div>
+      <div class="meta">
+        <div>${escapeHtml(content.candidate || "You")} — ${escapeHtml(content.role || "")}</div>
+        <div>Overall score out of 100</div>
+      </div>
+    </div>
+    ${overallHtml}
+    ${compRows}
+    <div class="section-title">Per-question breakdown</div>
+    ${qCards || '<div class="report-status">No scored answers yet.</div>'}
+  `;
+}
+
+async function showCompletionAndReport() {
+  joinSection.style.display = "none";
+  completeSection.style.display = "block";
+  window.scrollTo({ top: 0, behavior: "smooth" });
+
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      const res = await fetch(`/v1/interviews/${interviewId}/report`);
+      if (res.ok) {
+        const data = await res.json();
+        reportStatus.style.display = "none";
+        renderReport(data);
+        return;
+      }
+    } catch (e) { /* keep trying */ }
+    await new Promise(r => setTimeout(r, 3000));
+  }
+  reportStatus.textContent = "Your report is still being prepared — check back with HR shortly.";
+}
+
+let pollTimer = null;
+function pollStatus() {
+  pollTimer = setInterval(async () => {
+    try {
+      const res = await fetch(`/v1/interviews/${interviewId}`);
+      const data = await res.json();
+      if (data.status === "completed") {
+        clearInterval(pollTimer);
+        showCompletionAndReport();
+      }
+    } catch (e) { /* keep polling */ }
+  }, 3000);
 }
 
 joinBtn.onclick = async () => {
@@ -43,18 +439,22 @@ joinBtn.onclick = async () => {
     return;
   }
   joinBtn.disabled = true;
-  setStatus("Requesting interview access token...");
+  langOptions.style.opacity = "0.5";
+  langOptions.style.pointerEvents = "none";
+  setStatus("Setting up your interview...");
 
   try {
+    const langFd = new FormData();
+    langFd.append("language", selectedLanguage);
+    await fetch(`/v1/interviews/${interviewId}/language`, { method: "POST", body: langFd });
+
+    setStatus("Requesting interview access token...");
     const res = await fetch(`/v1/interviews/${interviewId}/candidate-token`, { method: "POST" });
     if (!res.ok) throw new Error("Failed to get candidate token");
     const { token, url } = await res.json();
 
     setStatus("Connecting to room...");
-    const room = new LivekitClient.Room({
-      adaptiveStream: true,
-      dynacast: true,
-    });
+    const room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
 
     const attachTrack = (track) => {
       if (track.kind === "audio") {
@@ -67,32 +467,75 @@ joinBtn.onclick = async () => {
 
     room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
       attachTrack(track);
-      setStatus(`Connected with AI Interviewer. Speaking now...`, true);
+      setStatus("Connected with AI interviewer", "connected");
     });
 
     room.on(LivekitClient.RoomEvent.ParticipantConnected, (participant) => {
-      setStatus(`Interviewer joined the room. Starting...`, true);
+      setStatus("Interviewer joined the room. Starting...", "connected");
+    });
+
+    room.on(LivekitClient.RoomEvent.TranscriptionReceived, (segments, participant, publication) => {
+      const isAgent = participant && !participant.isLocal;
+      for (const seg of segments) {
+        upsertTranscript(isAgent ? "agent" : "candidate", seg.text, {
+          final: seg.final !== false,
+          segmentId: seg.id,
+        });
+      }
+    });
+
+    room.on(LivekitClient.RoomEvent.ActiveSpeakersChanged, (speakers) => {
+      if (speakers.length === 0) { hideListeningBubble(); return; }
+      const speakingLocal = speakers.some(p => p.isLocal);
+      if (speakingLocal) {
+        setStatus("Listening to you...", "speaking");
+        showListeningBubble();
+        doneSpeakingBtn.style.display = "inline-flex";
+      } else {
+        setStatus("Interviewer is speaking...", "speaking");
+        hideListeningBubble();
+      }
     });
 
     room.on(LivekitClient.RoomEvent.Disconnected, () => {
-      setStatus("Interview completed. You can return to the HR console for the report.");
+      setStatus("Interview session ended.");
+      showCompletionAndReport();
     });
 
     await room.connect(url, token);
-    await room.localParticipant.setMicrophoneEnabled(true);
 
-    // Attach any existing remote audio tracks
+    // Wire these up BEFORE the mic permission request — if the candidate denies/loses mic
+    // access, the room connection itself is still fine (they can still hear the interviewer,
+    // and status/report polling should still work) rather than the whole join flow aborting.
+    doneSpeakingBtn.onclick = () => {
+      hideListeningBubble();
+      room.localParticipant.publishData(new TextEncoder().encode("done"), { reliable: true, topic: "commit_turn" });
+      setStatus("Sent — processing your answer...", "speaking");
+    };
+    pollStatus();
+
     room.remoteParticipants.forEach((participant) => {
       participant.trackPublications.forEach((pub) => {
         if (pub.track) attachTrack(pub.track);
       });
     });
 
-    setStatus("Connected. The AI interviewer is joining...", true);
+    try {
+      await room.localParticipant.setMicrophoneEnabled(true);
+      setStatus("Connected. The AI interviewer is joining...", "connected");
+    } catch (micErr) {
+      console.error(micErr);
+      setStatus("Connected, but microphone access was denied — allow microphone access in your browser and reload to answer.", "connected");
+    }
   } catch (err) {
     console.error(err);
     joinBtn.disabled = false;
-    setStatus("Connection error: " + err.message);
+    langOptions.style.opacity = "";
+    langOptions.style.pointerEvents = "";
+    const isMicDenied = err.name === "NotAllowedError" || /permission/i.test(err.message || "");
+    setStatus(isMicDenied
+      ? "Microphone access is blocked. Please allow microphone access for this site in your browser settings, then click Join Interview again."
+      : "Connection error: " + err.message);
   }
 };
 </script>

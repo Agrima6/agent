@@ -3,6 +3,7 @@
     "id": "q_backend_1",
     "type": "scenario",
     "difficulty": "medium",
+    "role_tags": ["backend", "fullstack", "devops"],
     "competencies": ["problem_solving", "technical_depth"],
     "question_text": "Imagine your application suddenly receives five times its normal traffic. The database is getting a lot of repeated reads and users are reporting slow pages. How would you investigate the issue and where, if anywhere, would caching fit into your solution?",
     "expected_topics": ["identify bottleneck", "separate read/write path", "caching strategy", "TTL/invalidation", "consistency", "monitoring", "failure handling"],
@@ -12,6 +13,7 @@
     "id": "q_backend_2",
     "type": "scenario",
     "difficulty": "medium",
+    "role_tags": ["backend", "fullstack", "devops"],
     "competencies": ["technical_depth", "decision_making"],
     "question_text": "You need to design an API that must remain reliable even if a downstream payment provider is slow or down. How would you approach this?",
     "expected_topics": ["timeouts", "retries", "circuit breaker", "idempotency", "fallback/queueing", "monitoring"],
@@ -21,6 +23,7 @@
     "id": "q_general_1",
     "type": "behavioral",
     "difficulty": "easy",
+    "role_tags": ["general"],
     "competencies": ["ownership", "collaboration"],
     "question_text": "Tell me about a time you disagreed with a teammate about a technical decision. How did you handle it?",
     "expected_topics": ["specific situation", "reasoning presented", "resolution", "outcome", "what they learned"],
@@ -30,6 +33,7 @@
     "id": "q_general_2",
     "type": "behavioral",
     "difficulty": "easy",
+    "role_tags": ["general"],
     "competencies": ["adaptability", "learning_ability"],
     "question_text": "Describe a situation where you had to learn something completely new under time pressure. What did you do?",
     "expected_topics": ["specific context", "learning approach", "outcome", "time constraint handled"],
@@ -39,9 +43,120 @@
     "id": "q_support_1",
     "type": "scenario",
     "difficulty": "medium",
+    "role_tags": ["support", "general"],
     "competencies": ["customer_handling", "communication"],
     "question_text": "A customer is angry because a bug affected their business for two days before anyone noticed. How would you handle the conversation and the follow-up?",
     "expected_topics": ["acknowledge impact", "clear communication", "root cause explanation", "prevention", "follow-up plan"],
     "followup_topics": ["how they'd rebuild trust", "what they'd change in monitoring"]
+  },
+  {
+    "id": "q_frontend_1",
+    "type": "scenario",
+    "difficulty": "medium",
+    "role_tags": ["frontend", "fullstack"],
+    "competencies": ["practical_application", "technical_depth"],
+    "question_text": "You're handed a page that takes several seconds to become interactive on a mid-range phone, and users are dropping off before it loads. How would you figure out what's actually slow, and what would you consider fixing first?",
+    "expected_topics": ["measure before optimizing", "bundle size / code splitting", "render-blocking resources", "lazy loading", "perceived vs actual performance", "re-render cost"],
+    "followup_topics": ["how they'd measure real-user impact", "trade-offs of code splitting", "handling regressions later"]
+  },
+  {
+    "id": "q_frontend_2",
+    "type": "scenario",
+    "difficulty": "medium",
+    "role_tags": ["frontend", "fullstack"],
+    "competencies": ["technical_depth", "problem_solving"],
+    "question_text": "A form in the product needs to support multiple steps, save partial progress, and work even if the user's connection drops mid-way. How would you approach the state management for this?",
+    "expected_topics": ["state persistence strategy", "optimistic vs pessimistic updates", "conflict/retry handling", "validation across steps", "UX for connectivity loss"],
+    "followup_topics": ["where state should live", "handling stale/conflicting saves", "accessibility of multi-step flows"]
+  },
+  {
+    "id": "q_frontend_3",
+    "type": "behavioral",
+    "difficulty": "easy",
+    "role_tags": ["frontend", "fullstack"],
+    "competencies": ["communication", "ownership"],
+    "question_text": "Tell me about a time a design handed to you wasn't feasible to build as-is. What did you do?",
+    "expected_topics": ["specific constraint identified", "how they communicated it", "alternative proposed", "outcome", "relationship with design maintained"],
+    "followup_topics": ["how they'd prevent this earlier next time", "how the designer reacted"]
+  },
+  {
+    "id": "q_pm_1",
+    "type": "scenario",
+    "difficulty": "medium",
+    "role_tags": ["product_manager"],
+    "competencies": ["prioritization", "stakeholder_communication"],
+    "question_text": "You have three teams each convinced their feature is the most urgent for next quarter, and only enough engineering capacity for one and a half of them. How would you decide what actually ships, and how would you communicate that decision?",
+    "expected_topics": ["prioritization framework/criteria", "data or evidence used", "stakeholder alignment approach", "how tradeoffs are communicated", "handling pushback"],
+    "followup_topics": ["what they'd do if a stakeholder still disagreed", "how they'd revisit the decision if new data came in"]
+  },
+  {
+    "id": "q_pm_2",
+    "type": "scenario",
+    "difficulty": "medium",
+    "role_tags": ["product_manager"],
+    "competencies": ["problem_solving", "strategic_thinking"],
+    "question_text": "A feature you shipped three months ago has low adoption despite strong pre-launch enthusiasm from users in interviews. How would you figure out what went wrong, and what would you do next?",
+    "expected_topics": ["distinguishing discovery bias from real signal", "usage data vs qualitative research", "hypothesis generation", "deciding iterate vs sunset", "involving the team in the diagnosis"],
+    "followup_topics": ["what metrics they'd look at first", "how they'd avoid this next launch"]
+  },
+  {
+    "id": "q_pm_3",
+    "type": "behavioral",
+    "difficulty": "easy",
+    "role_tags": ["product_manager"],
+    "competencies": ["execution_ownership", "stakeholder_communication"],
+    "question_text": "Tell me about a time a project you owned slipped its deadline. What happened, and how did you handle communicating it?",
+    "expected_topics": ["specific cause of slip", "when/how they surfaced it", "how stakeholders were informed", "what changed afterward", "accountability without blame-shifting"],
+    "followup_topics": ["what they'd do differently in scoping", "how the team responded"]
+  },
+  {
+    "id": "q_bluecollar_1",
+    "type": "scenario",
+    "difficulty": "easy",
+    "role_tags": ["blue_collar"],
+    "competencies": ["safety_awareness", "reliability"],
+    "question_text": "One day you notice the machine you are working on is making a strange noise, but you are behind on your work target for the day. What would you do?",
+    "expected_topics": ["reports the issue instead of ignoring it", "safety before speed", "tells the right person", "does not take unnecessary risk"],
+    "followup_topics": ["what they would say to their supervisor", "what if the supervisor tells them to keep working anyway"]
+  },
+  {
+    "id": "q_bluecollar_2",
+    "type": "scenario",
+    "difficulty": "easy",
+    "role_tags": ["blue_collar"],
+    "competencies": ["following_instructions", "reliability"],
+    "question_text": "Your supervisor gives you an instruction that is different from how you were trained to do the task. What would you do?",
+    "expected_topics": ["asks the supervisor to clarify", "does not just guess", "follows the correct/safe method", "respectful communication"],
+    "followup_topics": ["what if the supervisor is not available right away", "how they would double check they understood correctly"]
+  },
+  {
+    "id": "q_bluecollar_3",
+    "type": "behavioral",
+    "difficulty": "easy",
+    "role_tags": ["blue_collar"],
+    "competencies": ["reliability", "practical_skill"],
+    "question_text": "Tell me about a time you had to keep working carefully even when you were very tired, or it was very hot, or it was very late in your shift. What did you do to stay safe and get the work done properly?",
+    "expected_topics": ["specific real situation", "how they managed their energy/focus", "safety maintained", "outcome of the work"],
+    "followup_topics": ["what they do to prepare for a long or hard shift", "what they'd do if they felt truly unable to continue safely"]
+  },
+  {
+    "id": "q_bluecollar_4",
+    "type": "behavioral",
+    "difficulty": "easy",
+    "role_tags": ["blue_collar"],
+    "competencies": ["safety_awareness", "teamwork"],
+    "question_text": "Have you ever seen a co-worker not follow a safety rule? What did you do?",
+    "expected_topics": ["specific real situation", "how they responded in the moment", "whether/how they reported it", "outcome"],
+    "followup_topics": ["how they would handle it if the co-worker got upset", "what they think is the right way to raise a safety concern"]
+  },
+  {
+    "id": "q_bluecollar_5",
+    "type": "behavioral",
+    "difficulty": "easy",
+    "role_tags": ["blue_collar"],
+    "competencies": ["teamwork", "reliability"],
+    "question_text": "Tell me about a time a co-worker did not show up or could not finish their part of the work, and it affected you. What did you do?",
+    "expected_topics": ["specific real situation", "how they adapted", "whether they helped cover the work", "communication with supervisor/team"],
+    "followup_topics": ["how they feel about helping with work that is not usually theirs", "what they'd want a co-worker to do for them in the same situation"]
   }
 ]
