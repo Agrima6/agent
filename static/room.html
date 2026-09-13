@@ -257,6 +257,10 @@ function setStatus(text, kind = "idle") {
 
 const interimBubbles = {};
 let listeningRow = null;
+// Only true once the interviewer has actually said something. Guards against ambient mic
+// noise tripping local VAD and showing "Listening to you..." before the agent has even
+// joined/spoken — which looked like the interviewer was ignoring the candidate.
+let agentHasSpoken = false;
 
 // Groq's Whisper STT only returns a FINAL transcript once you stop talking — there's no live
 // word-by-word captioning. To keep the interview feeling alive while you're mid-answer (rather
@@ -476,6 +480,7 @@ joinBtn.onclick = async () => {
 
     room.on(LivekitClient.RoomEvent.TranscriptionReceived, (segments, participant, publication) => {
       const isAgent = participant && !participant.isLocal;
+      if (isAgent) agentHasSpoken = true;
       for (const seg of segments) {
         upsertTranscript(isAgent ? "agent" : "candidate", seg.text, {
           final: seg.final !== false,
@@ -488,6 +493,10 @@ joinBtn.onclick = async () => {
       if (speakers.length === 0) { hideListeningBubble(); return; }
       const speakingLocal = speakers.some(p => p.isLocal);
       if (speakingLocal) {
+        // Ignore local mic activity until the interviewer has actually said something —
+        // otherwise ambient noise while the agent is still connecting/dispatching falsely
+        // shows "Listening to you..." as if the interviewer heard and ignored the candidate.
+        if (!agentHasSpoken) return;
         setStatus("Listening to you...", "speaking");
         showListeningBubble();
         doneSpeakingBtn.style.display = "inline-flex";
