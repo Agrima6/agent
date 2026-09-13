@@ -5,7 +5,13 @@ databases:
     user: workmate_iq
 
 services:
-  # FastAPI service: HR console, candidate room page, all /v1/* API endpoints.
+  # Single free web service running BOTH the FastAPI app (HR console, candidate room, API) AND
+  # the LiveKit voice agent worker (spawned as a subprocess at startup via RUN_AGENT_INLINE).
+  # Render's free tier only supports "web" services (things that bind to a port) — a separate
+  # background worker needs a paid plan. Running the agent as a child process of the web
+  # service keeps this entirely on the free tier, at the cost of both sharing one container's
+  # resources and both going to sleep together after 15 min of no HTTP traffic (mitigate with
+  # a free external uptime pinger such as UptimeRobot hitting "/" every 5 minutes).
   - type: web
     name: workmate-iq-api
     runtime: python
@@ -13,58 +19,14 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
     envVars:
+      - key: RUN_AGENT_INLINE
+        value: "true"
       - key: DATABASE_URL
         fromDatabase:
           name: workmate-iq-db
           property: connectionString
       - key: API_BASE_URL
         sync: false  # set manually after first deploy to this service's own public URL
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: GROQ_API_KEY
-        sync: false
-      - key: ELEVENLABS_API_KEY
-        sync: false
-      - key: LIVEKIT_URL
-        sync: false
-      - key: LIVEKIT_API_KEY
-        sync: false
-      - key: LIVEKIT_API_SECRET
-        sync: false
-      - key: TTS_PROVIDER
-        value: sarvam
-      - key: TTS_VOICE
-        sync: false
-      - key: SARVAM_API_KEY
-        sync: false
-      - key: SARVAM_MODEL
-        value: "bulbul:v3"
-      - key: SARVAM_SPEAKER
-        sync: false
-      - key: SARVAM_LANGUAGE_CODE
-        value: en-IN
-      - key: SARVAM_PACE
-        value: "1.0"
-      - key: SARVAM_SAMPLE_RATE
-        value: "22050"
-
-  # LiveKit voice agent worker: connects to LiveKit Cloud and joins interview rooms. No public
-  # URL of its own — needs a paid instance type since Render's free tier only runs web services
-  # (things that answer HTTP requests); a background worker has nothing to answer, so free-tier
-  # instances spin it down as "idle" almost immediately.
-  - type: worker
-    name: workmate-iq-agent
-    runtime: python
-    plan: starter
-    buildCommand: pip install -r requirements.txt
-    startCommand: python agent.py start
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: workmate-iq-db
-          property: connectionString
-      - key: API_BASE_URL
-        sync: false  # same value as workmate-iq-api's own public URL
       - key: OPENAI_API_KEY
         sync: false
       - key: GROQ_API_KEY

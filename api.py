@@ -1,4 +1,7 @@
 import logging
+import os
+import subprocess
+import sys
 import uuid
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
@@ -24,6 +27,32 @@ from roles import competencies_for_role, detect_role_type
 init_db()
 app = FastAPI(title="Workmate.IQ Interview Agent (MVP)")
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+_agent_process: subprocess.Popen | None = None
+
+
+@app.on_event("startup")
+def _start_agent_worker():
+    """Run the LiveKit voice agent as a background subprocess of this same web process.
+
+    Render's (and most PaaS) free tier only runs "web" service types (ones that bind to a
+    port) — a separate background worker requires a paid plan. Since a free web service's
+    container can run whatever additional processes it wants internally, spawning the agent
+    worker here means the whole app (API + voice agent) fits inside one free web service.
+    Guarded by RUN_AGENT_INLINE so local dev can keep running `python agent.py dev` separately
+    (the default local flow) without spawning a duplicate worker.
+    """
+    global _agent_process
+    if os.getenv("RUN_AGENT_INLINE", "false").lower() != "true":
+        return
+    logger.info("Starting LiveKit agent worker as a subprocess (RUN_AGENT_INLINE=true)")
+    _agent_process = subprocess.Popen([sys.executable, "agent.py", "start"])
+
+
+@app.on_event("shutdown")
+def _stop_agent_worker():
+    if _agent_process is not None and _agent_process.poll() is None:
+        _agent_process.terminate()
 
 
 @app.get("/")
