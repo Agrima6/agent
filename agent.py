@@ -540,4 +540,13 @@ async def entrypoint(ctx: JobContext):
 AGENT_NAME = "workmate-interviewer"
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, agent_name=AGENT_NAME))
+    cli.run_app(WorkerOptions(
+        entrypoint_fnc=entrypoint,
+        agent_name=AGENT_NAME,
+        # Default load_threshold (0.7) marks the worker "unavailable" for new jobs above 70%
+        # reported CPU load. On a free-tier host's fractional shared CPU, just loading the VAD
+        # model pushes past that immediately, so the worker refuses every job. Raise it close
+        # to the max allowed (must be <1 in prod) so it keeps accepting jobs on constrained
+        # hardware — real responsiveness will still reflect the actual CPU available.
+        load_threshold=0.99,
+    ))
