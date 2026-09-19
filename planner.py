@@ -3,6 +3,7 @@ from pathlib import Path
 
 from llm_client import structured_json
 from roles import detect_role_type, is_plain_language_role
+from retrieval import select_questions
 
 QUESTION_BANK = json.loads(Path(__file__).with_name("question_bank.json").read_text())
 
@@ -72,24 +73,21 @@ def generate_dynamic_questions(role_name: str, role_competencies: list[dict], co
     return questions
 
 
-def pick_bank_questions(role_competencies: list[dict], count: int, role_name: str = "") -> list[dict]:
-    comp_keys = {c["key"] for c in role_competencies}
+def pick_bank_questions(role_competencies: list[dict], count: int, role_name: str = "",
+                         already_selected_ids: set[str] | None = None) -> list[dict]:
+    """Semantic retrieval over the question bank (plan §6, §14): metadata filter by role type,
+    embedding-similarity ranking against the role/competencies, semantic-duplicate removal, and
+    MMR diversity selection — replacing the previous plain keyword/tag-overlap scoring, which
+    could return several questions that measure essentially the same thing (e.g. "how would you
+    scale a cache" and "how would you handle more cache traffic" both surviving because each
+    independently overlapped on the same competency tag).
+    """
+    comp_keys = [c["key"] for c in role_competencies]
     role_type = detect_role_type(role_name) if role_name else "general"
-
-    # Prefer questions explicitly tagged for this role type (or role-agnostic ones tagged
-    # "general") so a Frontend or PM interview doesn't end up asking backend-flavored
-    # scenario questions just because a competency key happens to overlap (e.g. both roles
-    # score "communication"). Fall back to the full bank if a role type has too few tagged
-    # questions, so a role we don't have dedicated content for still gets a full interview.
-    eligible = [q for q in QUESTION_BANK if role_type in q.get("role_tags", ["general"]) or "general" in q.get("role_tags", [])]
-    pool = eligible if len(eligible) >= count else QUESTION_BANK
-
-    scored = []
-    for q in pool:
-        overlap = len(set(q["competencies"]) & comp_keys)
-        scored.append((overlap, q))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [q for _, q in scored[:count]]
+    return select_questions(
+        QUESTION_BANK, role_name=role_name, role_type=role_type, competency_keys=comp_keys,
+        count=count, already_selected_ids=already_selected_ids,
+    )
 
 
 def generate_resume_question(evidence_profile: dict, role_name: str, role_competencies: list[dict] | None = None) -> dict:
@@ -151,7 +149,9 @@ def build_interview_plan(role_competencies: list[dict], role_name: str, evidence
     questions.extend(dynamic_questions)
 
     bank_slot_count = slot_count - len(dynamic_questions)
-    bank_questions = pick_bank_questions(role_competencies, bank_slot_count, role_name=role_name)
+    already_selected_ids = {q["id"] for q in questions}
+    bank_questions = pick_bank_questions(role_competencies, bank_slot_count, role_name=role_name,
+                                          already_selected_ids=already_selected_ids)
     questions.extend(bank_questions)
 
     return {

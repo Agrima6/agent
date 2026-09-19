@@ -32,6 +32,7 @@ from livekit.plugins import silero
 
 from config import (
     API_BASE_URL,
+    AGENT_SERVICE_KEY,
     GROQ_API_KEY,
     OPENAI_API_KEY,
     ELEVENLABS_API_KEY,
@@ -235,22 +236,42 @@ def detect_intent(text: str) -> str | None:
     return None
 
 
+_AUTH_HEADERS = {"X-Agent-Key": AGENT_SERVICE_KEY} if AGENT_SERVICE_KEY else {}
+
+
 class InterviewRunner:
     """Deterministic interview progression. Owns no LLM calls except the
     coverage judge, which is a narrow, structured, non-conversational call."""
 
-    def __init__(self, http: httpx.AsyncClient, interview_id: str, plan: dict, candidate_name: str = ""):
+    def __init__(self, http: httpx.AsyncClient, interview_id: str, plan: dict, candidate_name: str = "",
+                 coverage_threshold: float = 0.7, max_followups_per_question: int = 2):
         self.http = http
         self.interview_id = interview_id
         self.questions = list(plan["questions"])
         self.idx = 0
         self.candidate_name = candidate_name
-        self.state = QuestionState(question_id=self.questions[0]["id"]) if self.questions else None
+        self.coverage_threshold = coverage_threshold
+        self.max_followups_per_question = max_followups_per_question
+        self.state = self._new_question_state(self.questions[0]["id"]) if self.questions else None
         # Set only once /complete has actually been posted — NOT when current_question
         # merely becomes None, since several turns of speech (and the /complete call
         # itself) still need to happen after that point. The job must stay alive, and the
         # shared httpx client open, until this fires.
         self.done = asyncio.Event()
+        # Generation fence (Workmate_production_scalable_fix_plan_v2.md #2): every async call
+        # that may still be in flight when the interview ends (chiefly judge_coverage, which
+        # runs in a worker thread and can return after end_interview() has already fired)
+        # captures `generation` at start and must discard its result if `generation` or
+        # `terminal` have changed by the time it resolves.
+        self.generation = 0
+        self.terminal = False
+
+    def _new_question_state(self, question_id: str) -> QuestionState:
+        return QuestionState(
+            question_id=question_id,
+            coverage_threshold=self.coverage_threshold,
+            max_followups=self.max_followups_per_question,
+        )
 
     @property
     def current_question(self) -> dict | None:
@@ -262,28 +283,83 @@ class InterviewRunner:
         self.idx += 1
         q = self.current_question
         if q:
-            self.state = QuestionState(question_id=q["id"])
+            self.state = self._new_question_state(q["id"])
 
     def end_early(self):
         """Jump straight past all remaining questions so the next _ask_current_question()
         sees current_question=None and delivers the closing + marks the interview complete."""
         self.idx = len(self.questions)
 
+    def is_stale(self, captured_generation: int) -> bool:
+        """True if the interview ended (or ended and restarted) since `captured_generation` was
+        captured — the caller must discard whatever result it was about to act on."""
+        return self.terminal or captured_generation != self.generation
+
+    async def start(self):
+        try:
+            await self.http.post(f"{API_BASE_URL}/v1/interviews/{self.interview_id}/start", headers=_AUTH_HEADERS)
+        except Exception:
+            logger.exception("failed to mark interview IN_PROGRESS (non-fatal)")
+
     async def record_turn(self, question_id: str, speaker: str, text: str, is_followup: bool = False):
-        await self.http.post(
-            f"{API_BASE_URL}/v1/interviews/{self.interview_id}/turns",
-            data={"question_id": question_id, "question_text": "", "speaker": speaker,
-                  "text": text, "is_followup": is_followup},
-        )
+        if self.terminal:
+            return
+        try:
+            resp = await self.http.post(
+                f"{API_BASE_URL}/v1/interviews/{self.interview_id}/turns",
+                data={"question_id": question_id, "question_text": "", "speaker": speaker,
+                      "text": text, "is_followup": is_followup},
+                headers=_AUTH_HEADERS,
+            )
+            if resp.status_code == 409:
+                # Server-side generation fence rejected a turn from an interview that had
+                # already ended by the time this request arrived — expected under races, not
+                # a bug. Mark terminal locally too so nothing else keeps trying.
+                self.terminal = True
+        except Exception:
+            logger.exception("record_turn request failed")
 
     def record_turn_nowait(self, question_id: str, speaker: str, text: str, is_followup: bool = False):
         """Fire-and-forget: persistence must never add latency to the live voice loop."""
         task = asyncio.create_task(self.record_turn(question_id, speaker, text, is_followup))
         task.add_done_callback(lambda t: t.exception() and logger.error("record_turn failed: %s", t.exception()))
 
+    def record_coverage_result_nowait(self, question_id: str, coverage: dict):
+        import json
+
+        async def _post():
+            try:
+                await self.http.post(
+                    f"{API_BASE_URL}/v1/interviews/{self.interview_id}/coverage-results",
+                    data={
+                        "question_id": question_id,
+                        "coverage_score": coverage.get("coverage_score", 0.0),
+                        "covered_topics": json.dumps(coverage.get("covered_topics", [])),
+                        "missing_topics": json.dumps(coverage.get("missing_topics", [])),
+                    },
+                    headers=_AUTH_HEADERS,
+                )
+            except Exception:
+                logger.exception("record_coverage_result failed")
+
+        task = asyncio.create_task(_post())
+        task.add_done_callback(lambda t: t.exception() and logger.error("coverage-result post failed: %s", t.exception()))
+
     async def complete(self):
-        await self.http.post(f"{API_BASE_URL}/v1/interviews/{self.interview_id}/complete")
-        self.done.set()
+        """Atomic terminal transition: flip local state BEFORE the network call, not after —
+        so any concurrently-running coverage judge / reply generation sees `terminal=True` (via
+        is_stale()) the instant this coroutine starts, not only once /complete round-trips."""
+        if self.terminal:
+            return  # already completing/completed — /complete is idempotent server-side too,
+            # but skip the redundant call entirely when we already know locally.
+        self.terminal = True
+        self.generation += 1
+        try:
+            await self.http.post(f"{API_BASE_URL}/v1/interviews/{self.interview_id}/complete", headers=_AUTH_HEADERS)
+        except Exception:
+            logger.exception("complete request failed")
+        finally:
+            self.done.set()
 
 
 class InterviewerAgent(Agent):
@@ -411,9 +487,19 @@ class InterviewerAgent(Agent):
         # judge_coverage makes a *synchronous* network call — running it inline would block
         # the whole asyncio event loop (and therefore the voice pipeline) for its full
         # duration. Push it to a thread so the agent can start responding immediately after.
+        # Capture the generation BEFORE awaiting: if the candidate ends the interview while
+        # this call is in flight, self.runner.generation bumps and this stale result must be
+        # discarded on return rather than producing a late TTS response (the exact bug in
+        # Workmate_production_scalable_fix_plan_v2.md #2).
+        captured_generation = self.runner.generation
         coverage = await asyncio.to_thread(
             judge_coverage, q["question_text"], q.get("expected_topics", []), answer_text
         )
+        if self.runner.is_stale(captured_generation):
+            logger.info("Discarding stale coverage result for interview %s (interview ended mid-call)",
+                        self.runner.interview_id)
+            raise StopResponse()
+        self.runner.record_coverage_result_nowait(q["id"], coverage)
         action = decide_next_action(self.runner.state, coverage)
 
         if action == "followup":
@@ -484,7 +570,12 @@ async def entrypoint(ctx: JobContext):
         lang_cfg = LANGUAGE_CONFIGS[language]
         logger.info(f"Interview language: {lang_cfg['label']} ({language}); role={role_name!r} plain_language={plain_language}")
 
-        runner = InterviewRunner(http, interview_id, plan, candidate_name=candidate_name)
+        runner = InterviewRunner(
+            http, interview_id, plan, candidate_name=candidate_name,
+            coverage_threshold=interview_data.get("coverage_threshold", 0.7),
+            max_followups_per_question=interview_data.get("max_followups_per_question", 2),
+        )
+        await runner.start()
 
         if TTS_PROVIDER == "sarvam" and SARVAM_API_KEY:
             logger.info(f"Initializing SarvamTTS with voice/speaker: {SARVAM_SPEAKER}")
@@ -504,7 +595,11 @@ async def entrypoint(ctx: JobContext):
             tts_engine = EdgeTTS(voice=TTS_VOICE)
 
         session = AgentSession(
-            vad=silero.VAD.load(),
+            # Loaded once in prewarm() at worker startup, not per-job - this
+            # was previously the single biggest chunk of "time until the
+            # interviewer says anything" (~1-2s of model loading on every
+            # new interview instead of zero).
+            vad=ctx.proc.userdata["vad"],
             stt=lk_groq.STT(model="whisper-large-v3-turbo", api_key=GROQ_API_KEY, language=lang_cfg["stt_language"]),
             # Lower temperature than a general-purpose default: this agent should stick closely
             # to grounded facts and given instructions rather than getting creative, since
@@ -539,9 +634,18 @@ async def entrypoint(ctx: JobContext):
 
 AGENT_NAME = "workmate-interviewer"
 
+
+def prewarm(proc):
+    # Runs once when the worker process starts (not per-job) - loading the
+    # Silero VAD model here instead of inside entrypoint() means every
+    # interview after the first one skips this load entirely.
+    proc.userdata["vad"] = silero.VAD.load()
+
+
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(
         entrypoint_fnc=entrypoint,
+        prewarm_fnc=prewarm,
         agent_name=AGENT_NAME,
         # Default load_threshold (0.7) marks the worker "unavailable" for new jobs above 70%
         # reported CPU load. On a free-tier host's fractional shared CPU, just loading the VAD
@@ -549,4 +653,13 @@ if __name__ == "__main__":
         # to the max allowed (must be <1 in prod) so it keeps accepting jobs on constrained
         # hardware — real responsiveness will still reflect the actual CPU available.
         load_threshold=0.99,
+        # `dev` mode defaults num_idle_processes to 0 (vs. 4 in `start`/prod), so every job cold-
+        # spawns a fresh subprocess and races the 10s default initialize_process_timeout. On a
+        # busy dev machine (screen share, video call, browser tabs) that spawn+VAD-load routinely
+        # loses that race, producing "no process became available after 3 attempts" and the
+        # candidate never hearing the agent join - not a code bug, a too-tight timing budget for
+        # local/dev conditions. Keeping one process pre-warmed and giving init more headroom fixes
+        # it without changing anything about job handling itself.
+        num_idle_processes=1,
+        initialize_process_timeout=60.0,
     ))
