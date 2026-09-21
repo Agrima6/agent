@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import subprocess
@@ -25,9 +26,11 @@ from db import (
     REPORT_PENDING, REPORT_PROCESSING, REPORT_READY, REPORT_FAILED,
 )
 from resume_parser import extract_text_from_pdf, parse_resume
-from planner import build_interview_plan, generate_dynamic_questions
+from planner import build_interview_plan, generate_dynamic_questions, warm_question_bank_embeddings
 from scoring import score_answer_content, score_communication, aggregate_final_score, generate_overall_summary
 from roles import competencies_for_role, detect_role_type
+from interaction_guard import NON_ANSWER_INTENTS
+from voice_config import VALID_V3_SPEAKERS, clamp_pace, resolve_voice
 
 init_db()
 app = FastAPI(title="Workmate.IQ Interview Agent (MVP)")
@@ -67,6 +70,14 @@ def _start_agent_worker():
         return
     logger.info("Starting LiveKit agent worker as a subprocess (RUN_AGENT_INLINE=true)")
     _agent_process = subprocess.Popen([sys.executable, "agent.py", "start"])
+
+
+@app.on_event("startup")
+def _warm_embeddings():
+    """Embed the question bank in the background so the first interview created after a restart
+    doesn't wait on the embedding provider (it took 15-24s cold, past the web app's request timeout)."""
+    import threading
+    threading.Thread(target=warm_question_bank_embeddings, name="warm-embeddings", daemon=True).start()
 
 
 @app.on_event("shutdown")
@@ -112,13 +123,74 @@ async def upload_resume(candidate_id: str, file: UploadFile = File(...), db: Ses
     return {"id": cand.id, "evidence_profile": cand.evidence_profile}
 
 
+MAX_HR_QUESTIONS = 20
+
+
+def _parse_hr_questions(raw: str, role_competencies: list[dict]) -> list[dict]:
+    """HR-configured questions arrive as a JSON list of {id?, text, topic?, time_limit?}. They are
+    validated and normalised into plan questions here; a malformed payload is rejected outright
+    rather than silently dropped, since HR-defined questions must be respected."""
+    if not raw or not raw.strip():
+        return []
+    try:
+        items = json.loads(raw)
+    except ValueError:
+        raise HTTPException(422, "hr_questions must be a JSON list")
+    if not isinstance(items, list) or len(items) > MAX_HR_QUESTIONS:
+        raise HTTPException(422, f"hr_questions must be a list of at most {MAX_HR_QUESTIONS} questions")
+    top = [c["key"] for c in sorted(role_competencies or [], key=lambda c: -c.get("weight", 0))[:2]] \
+        or ["practical_application", "problem_solving"]
+    questions = []
+    for i, item in enumerate(items, 1):
+        text = str((item or {}).get("text") or "").strip() if isinstance(item, dict) else ""
+        if not text or len(text) > 1500:
+            raise HTTPException(422, f"hr_questions[{i - 1}] needs non-empty text of at most 1500 characters")
+        try:
+            time_limit = int(item.get("time_limit") or item.get("timeLimit") or 0)
+        except (TypeError, ValueError):
+            time_limit = 0
+        questions.append({
+            "id": f"hr_{i}", "type": "hr", "difficulty": "medium", "competencies": top,
+            "question_text": text, "topic": str(item.get("topic") or "").strip()[:80],
+            "expected_topics": [], "followup_topics": [],
+            **({"time_limit": max(30, min(600, time_limit))} if time_limit else {}),
+        })
+    return questions
+
+
+def _validated_voice(gender: str, speaker: str, pace: float | None) -> dict:
+    gender = (gender or "").strip().lower()
+    speaker = (speaker or "").strip().lower()
+    if gender and gender not in ("male", "female"):
+        raise HTTPException(422, "voice_gender must be 'male' or 'female'")
+    if speaker and speaker not in VALID_V3_SPEAKERS:
+        raise HTTPException(422, f"voice_speaker must be one of {sorted(VALID_V3_SPEAKERS)}")
+    return {"voice_gender": gender or None, "voice_speaker": speaker or None,
+            "voice_pace": clamp_pace(pace) if pace is not None else None}
+
+
 @app.post("/v1/interviews", dependencies=[Depends(require_service_key)])
 def create_interview(candidate_id: str = Form(...), role_id: str = Form(...),
-                      duration_minutes: int = Form(30), db: Session = Depends(get_db)):
+                      duration_minutes: int = Form(30),
+                      hr_questions: str = Form(""), questions_json: str = Form(""),
+                      experience_level: str = Form(""),
+                      max_followups_per_question: int | None = Form(None),
+                      coverage_threshold: float | None = Form(None),
+                      depth_probe_enabled: bool = Form(True),
+                      voice_gender: str = Form(""), voice_speaker: str = Form(""),
+                      voice_pace: float | None = Form(None),
+                      db: Session = Depends(get_db)):
     cand = db.get(Candidate, candidate_id)
     role = db.get(Role, role_id)
     if not cand or not role:
         raise HTTPException(404, "candidate or role not found")
+
+    hr_question_list = _parse_hr_questions(hr_questions or questions_json, role.competencies)
+    if max_followups_per_question is not None and not 0 <= max_followups_per_question <= 5:
+        raise HTTPException(422, "max_followups_per_question must be between 0 and 5")
+    if coverage_threshold is not None and not 0.3 <= coverage_threshold <= 0.95:
+        raise HTTPException(422, "coverage_threshold must be between 0.3 and 0.95")
+    voice_fields = _validated_voice(voice_gender, voice_speaker, voice_pace)
 
     # Generate this role's scenario questions once and cache them, so every candidate who
     # interviews for the same role faces the same questions — standardized questions are a
@@ -137,14 +209,24 @@ def create_interview(candidate_id: str = Form(...), role_id: str = Form(...),
         min_questions=4,
         max_questions=7,
         cached_dynamic_questions=role.generated_questions,
+        hr_questions=hr_question_list,
     )
 
+    extra = {}
+    if max_followups_per_question is not None:
+        extra["max_followups_per_question"] = max_followups_per_question
+    if coverage_threshold is not None:
+        extra["coverage_threshold"] = coverage_threshold
     interview = Interview(
         candidate_id=candidate_id,
         role_id=role_id,
         duration_minutes=duration_minutes,
         plan=plan,
         status=states.CREATED,
+        experience_level=(experience_level.strip()[:80] or None),
+        depth_probe_enabled=int(depth_probe_enabled),
+        **voice_fields,
+        **extra,
     )
     db.add(interview)
     db.commit()
@@ -169,10 +251,76 @@ def get_interview(interview_id: str, db: Session = Depends(get_db)):
         "coverage_threshold": interview.coverage_threshold,
         "max_followups_per_question": interview.max_followups_per_question,
         "generation_id": interview.generation_id,
+        "duration_minutes": interview.duration_minutes,
+        "experience_level": interview.experience_level,
+        "depth_probe_enabled": bool(interview.depth_probe_enabled if interview.depth_probe_enabled is not None else 1),
+        "voice": {"gender": interview.voice_gender, "speaker": interview.voice_speaker, "pace": interview.voice_pace},
+        "progress": interview.progress,
     }
 
 
 SUPPORTED_LANGUAGES = {"en", "hi", "hinglish"}
+
+
+@app.post("/v1/interviews/{interview_id}/voice", dependencies=[Depends(require_service_key)])
+def set_interview_voice(interview_id: str, voice_gender: str = Form(""), voice_speaker: str = Form(""),
+                         voice_pace: float | None = Form(None), db: Session = Depends(get_db)):
+    """Per-interview voice override (e.g. from HR/admin settings). Empty values fall back to the
+    calibrated defaults in voice_config.py. Returns the voice that will actually be used."""
+    interview = db.get(Interview, interview_id)
+    if not interview:
+        raise HTTPException(404, "not found")
+    fields = _validated_voice(voice_gender, voice_speaker, voice_pace)
+    for name, value in fields.items():
+        setattr(interview, name, value)
+    db.commit()
+    return {"id": interview.id,
+            "voice": resolve_voice(interview.language, interview.voice_gender, interview.voice_speaker,
+                                    interview.voice_pace).as_dict()}
+
+
+@app.post("/v1/interviews/{interview_id}/progress", dependencies=[Depends(require_service_key)])
+def record_progress(interview_id: str, question_index: int = Form(...), followup_count: int = Form(0),
+                     small_talk_done: int = Form(0), phase: str = Form(""), db: Session = Depends(get_db)):
+    """The agent reports where the interview is after every transition, so the server holds the
+    authoritative progress and a restarted agent worker resumes instead of starting over. Progress
+    only ever moves forward: a late write from a stale worker can't rewind a newer one."""
+    interview = db.get(Interview, interview_id)
+    if not interview:
+        raise HTTPException(404, "not found")
+    if states.is_terminal(interview.status):
+        raise HTTPException(409, "INTERVIEW_ALREADY_COMPLETED")
+    current = interview.progress or {}
+    prev_q = current.get("question_index", 0)
+    stale = current and (
+        question_index < prev_q
+        or (question_index == prev_q and (small_talk_done < current.get("small_talk_done", 0)
+                                          or followup_count < current.get("followup_count", 0)))
+    )
+    if stale:
+        return {"accepted": False, "progress": current}
+    interview.progress = {"question_index": max(0, question_index), "followup_count": max(0, followup_count),
+                          "small_talk_done": max(0, small_talk_done), "phase": phase[:40]}
+    db.commit()
+    return {"accepted": True, "progress": interview.progress}
+
+
+@app.post("/v1/interviews/{interview_id}/tts-metadata", dependencies=[Depends(require_service_key)])
+def record_tts_metadata(interview_id: str, metadata: str = Form(...), db: Session = Depends(get_db)):
+    """Voice actually used + TTS delivery statistics (retries, reconnects, first-audio latency),
+    merged into Interview.voice_used so audio problems are measurable per interview afterwards."""
+    interview = db.get(Interview, interview_id)
+    if not interview:
+        raise HTTPException(404, "not found")
+    try:
+        data = json.loads(metadata)
+    except ValueError:
+        raise HTTPException(422, "metadata must be a JSON object")
+    if not isinstance(data, dict) or len(metadata) > 4000:
+        raise HTTPException(422, "metadata must be a small JSON object")
+    interview.voice_used = {**(interview.voice_used or {}), **data}
+    db.commit()
+    return {"ok": True}
 
 
 @app.post("/v1/interviews/{interview_id}/language")
@@ -195,12 +343,39 @@ def _mint_token(room_name: str, identity: str, name: str) -> str:
     return token.to_jwt()
 
 
+async def _agent_already_active(lk, room_name: str) -> bool:
+    """True if an interviewer agent is already running (or about to run) in this room.
+
+    Every candidate-token request used to create ANOTHER dispatch, so a page refresh put two
+    interviewers in one room - two voices speaking over each other. Checks LiveKit's own dispatch
+    state instead of guessing. Fails open: if the state can't be read (room doesn't exist yet, or
+    LiveKit is unreachable) it reports False, because a missing interviewer is worse than a rare
+    duplicate - and the agent also refuses to run beside another agent (agent.py).
+    """
+    from livekit.protocol import agent as lk_agent
+    try:
+        dispatches = await lk.agent_dispatch.list_dispatch(room_name=room_name)
+    except Exception:
+        return False
+    live = (lk_agent.JobStatus.JS_PENDING, lk_agent.JobStatus.JS_RUNNING)
+    for dispatch in dispatches:
+        if dispatch.agent_name != AGENT_NAME or dispatch.state.deleted_at:
+            continue
+        jobs = list(dispatch.state.jobs)
+        if not jobs or any(job.state.status in live for job in jobs):
+            return True
+    return False
+
+
 async def _ensure_agent_dispatched(room_name: str):
-    """Explicitly dispatch the interviewer agent to this room. Without this, a LiveKit
-    Cloud project with the Agents feature enabled will never route a job to the worker
-    (it silently sits idle waiting for a job that never comes)."""
+    """Explicitly dispatch the interviewer agent to this room, exactly once. Without dispatch, a
+    LiveKit Cloud project with the Agents feature enabled never routes a job to the worker (it
+    silently sits idle waiting for a job that never comes)."""
     lk = lk_api.LiveKitAPI(LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
     try:
+        if await _agent_already_active(lk, room_name):
+            logger.info("agent already active in %s - not dispatching a second interviewer", room_name)
+            return
         await lk.agent_dispatch.create_dispatch(
             lk_api.CreateAgentDispatchRequest(agent_name=AGENT_NAME, room=room_name)
         )
@@ -240,6 +415,7 @@ def start_interview(interview_id: str, db: Session = Depends(get_db)):
 @app.post("/v1/interviews/{interview_id}/turns", dependencies=[Depends(require_service_key)])
 def record_turn(interview_id: str, question_id: str = Form(...), question_text: str = Form(""),
                  speaker: str = Form(...), text: str = Form(...), is_followup: bool = Form(False),
+                 intent: str = Form(""), action: str = Form(""),
                  db: Session = Depends(get_db)):
     interview = db.get(Interview, interview_id)
     if not interview:
@@ -249,7 +425,8 @@ def record_turn(interview_id: str, question_id: str = Form(...), question_text: 
         # be persisted once the interview has ended.
         raise HTTPException(409, "INTERVIEW_ALREADY_COMPLETED")
     turn = InterviewTurn(interview_id=interview_id, question_id=question_id, question_text=question_text,
-                         speaker=speaker, text=text, is_followup=int(is_followup))
+                         speaker=speaker, text=text, is_followup=int(is_followup),
+                         intent=(intent[:40] or None), action=(action[:40] or None))
     db.add(turn)
     db.commit()
     return {"id": turn.id}
@@ -258,11 +435,17 @@ def record_turn(interview_id: str, question_id: str = Form(...), question_text: 
 @app.post("/v1/interviews/{interview_id}/coverage-results", dependencies=[Depends(require_service_key)])
 def record_coverage_result(interview_id: str, question_id: str = Form(...),
                             coverage_score: float = Form(...), covered_topics: str = Form("[]"),
-                            missing_topics: str = Form("[]"), db: Session = Depends(get_db)):
-    import json
+                            missing_topics: str = Form("[]"), evaluation: str = Form(""),
+                            action: str = Form(""), followup_count: int | None = Form(None),
+                            db: Session = Depends(get_db)):
+    try:
+        evaluation_json = json.loads(evaluation) if evaluation else None
+    except ValueError:
+        evaluation_json = None
     cov = CoverageResult(
         interview_id=interview_id, question_id=question_id, coverage_score=coverage_score,
         covered_topics=json.loads(covered_topics), missing_topics=json.loads(missing_topics),
+        evaluation=evaluation_json, action=(action[:40] or None), followup_count=followup_count,
     )
     db.add(cov)
     db.commit()
@@ -328,7 +511,8 @@ def list_integrity_events(interview_id: str, db: Session = Depends(get_db)):
 @app.get("/v1/interviews/{interview_id}/transcript", dependencies=[Depends(require_service_key)])
 def get_transcript(interview_id: str, db: Session = Depends(get_db)):
     turns = db.query(InterviewTurn).filter(InterviewTurn.interview_id == interview_id).order_by(InterviewTurn.started_at).all()
-    return [{"question_id": t.question_id, "speaker": t.speaker, "text": t.text, "is_followup": bool(t.is_followup)} for t in turns]
+    return [{"question_id": t.question_id, "speaker": t.speaker, "text": t.text, "is_followup": bool(t.is_followup),
+             "intent": t.intent, "action": t.action} for t in turns]
 
 
 def _run_scoring_job(interview_id: str, report_id: str):
@@ -359,7 +543,13 @@ def _run_scoring_job(interview_id: str, report_id: str):
         per_question_scores = []
         question_reports = []
         for qid, q in questions_by_id.items():
-            candidate_text = "\n".join(t.text for t in turns if t.question_id == qid and t.speaker == "candidate")
+            # Turns that were not an attempt to answer (hint/answer requests, prompt-injection,
+            # repeat requests, skips ...) are kept in the transcript but never scored as answers.
+            candidate_text = "\n".join(
+                t.text for t in turns
+                if t.question_id == qid and t.speaker == "candidate"
+                and (t.intent or "answer") not in {i.value for i in NON_ANSWER_INTENTS}
+            )
             if not candidate_text.strip():
                 continue
             content = score_answer_content(q["question_text"], q.get("expected_topics", []), candidate_text)
@@ -449,6 +639,10 @@ def complete_interview(interview_id: str, background_tasks: BackgroundTasks, db:
         # Someone else already moved it past ACTIVE in the same instant — re-enter this
         # handler's idempotent path instead of erroring.
         return complete_interview(interview_id, background_tasks, db)
+    except states.InvalidTransition:
+        # e.g. an interview that was created but never started (still PLANNED): there is nothing to
+        # complete. A clean 409 instead of an unhandled 500.
+        raise HTTPException(409, f"INTERVIEW_NOT_STARTED: status={interview.status}")
 
     report = Report(interview_id=interview_id, status=REPORT_PENDING)
     db.add(report)

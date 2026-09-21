@@ -1,35 +1,13 @@
-import json
-from openai import OpenAI
-
-from config import GROQ_API_KEY
-
-# Groq exposes an OpenAI-compatible chat completions API, so the same client
-# works — just pointed at Groq's base_url with a Groq key (free tier, no
-# billing required for the structured-JSON calls below).
-client = OpenAI(api_key=GROQ_API_KEY, base_url="https://api.groq.com/openai/v1")
-
-MODEL = "openai/gpt-oss-120b"
+from llm_provider import get_provider
 
 
-def structured_json(system_prompt: str, user_prompt: str, model: str = MODEL) -> dict:
-    """Call the LLM and force a JSON object response. Untrusted content passed via
-    user_prompt must already be wrapped/labeled by the caller as [UNTRUSTED]."""
-    resp = client.chat.completions.create(
-        model=model,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0.3,
-    )
-    return json.loads(resp.choices[0].message.content)
+def structured_json(system_prompt: str, user_prompt: str, model: str | None = None, *,
+                    reasoning_effort: str | None = None) -> dict:
+    """Call the configured LLM provider and force a JSON object response. Untrusted content passed
+    via user_prompt must already be wrapped/labeled by the caller as [UNTRUSTED].
 
-
-def chat_reply(system_prompt: str, history: list[dict], model: str = MODEL) -> str:
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "system", "content": system_prompt}, *history],
-        temperature=0.6,
-    )
-    return resp.choices[0].message.content
+    reasoning_effort="low" is for callers a person is waiting on (interview creation): on gpt-oss it
+    cut a comparable call from 2.2s to 0.8s. Scoring keeps the default (thorough) effort.
+    """
+    return get_provider().complete_json(system_prompt, user_prompt, temperature=0.3, model=model,
+                                        reasoning_effort=reasoning_effort, max_tokens=2500 if reasoning_effort else None)

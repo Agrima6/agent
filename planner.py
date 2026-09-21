@@ -3,7 +3,8 @@ from pathlib import Path
 
 from llm_client import structured_json
 from roles import detect_role_type, is_plain_language_role
-from retrieval import select_questions
+from retrieval import select_questions, warm_embedding_cache
+from topic_guard import is_duplicate_question
 
 QUESTION_BANK = json.loads(Path(__file__).with_name("question_bank.json").read_text())
 
@@ -56,7 +57,7 @@ def generate_dynamic_questions(role_name: str, role_competencies: list[dict], co
         f"LANGUAGE LEVEL: {'simple, plain, spoken-language friendly (non-technical, non-office worker)' if plain else 'professional'}\n"
         f"Write exactly {count} question(s)."
     )
-    result = structured_json(DYNAMIC_QUESTIONS_SYSTEM_PROMPT, user_prompt)
+    result = structured_json(DYNAMIC_QUESTIONS_SYSTEM_PROMPT, user_prompt, reasoning_effort="low")
     questions = []
     for i, q in enumerate(result.get("questions", [])[:count]):
         if not q.get("question_text"):
@@ -97,7 +98,7 @@ def generate_resume_question(evidence_profile: dict, role_name: str, role_compet
         "companies": evidence_profile.get("companies", [])[:5],
     })
     user_prompt = f"ROLE: {role_name}\nCANDIDATE EVIDENCE [UNTRUSTED]:\n{evidence_summary}"
-    result = structured_json(RESUME_QUESTION_SYSTEM_PROMPT, user_prompt)
+    result = structured_json(RESUME_QUESTION_SYSTEM_PROMPT, user_prompt, reasoning_effort="low")
     # Top two weighted competencies for this role, so a resume question for a PM scores
     # against prioritization/stakeholder skills rather than hardcoded backend keys.
     top_competencies = [c["key"] for c in sorted(role_competencies or [], key=lambda c: -c["weight"])[:2]] \
@@ -113,12 +114,70 @@ def generate_resume_question(evidence_profile: dict, role_name: str, role_compet
     }
 
 
+def _build_plan_with_hr_questions(role_competencies: list[dict], role_name: str, evidence_profile: dict,
+                                   min_questions: int, cached_dynamic_questions: list[dict] | None,
+                                   hr_questions: list[dict]) -> dict:
+    """Question priority: HR-configured questions (verbatim, in HR's order) -> resume-based ->
+    role-tailored generated -> question bank. Generated questions only fill slots HR left open and
+    are skipped if they ask essentially the same thing as a question already in the plan, so HR's
+    questions are never displaced or duplicated."""
+    questions = [
+        {"id": "p_intro", "type": "introduction", "question_text": None},
+        {"id": "p_candidate_intro", "type": "candidate_introduction",
+         "question_text": "To start, could you tell me a little about yourself and what you've been working on recently?"},
+        *hr_questions,
+    ]
+    target_entries = max(min_questions, 4) + 1
+    fill = max(0, target_entries - len(questions))
+    included_texts = [q["question_text"] for q in questions if q.get("question_text")]
+
+    def add_if_new(q: dict) -> bool:
+        text = q.get("question_text") or ""
+        if not text or is_duplicate_question(text, included_texts, 0.6):
+            return False
+        questions.append(q)
+        included_texts.append(text)
+        return True
+
+    added = 0
+    if fill and evidence_profile:
+        try:
+            added += add_if_new(generate_resume_question(evidence_profile, role_name, role_competencies))
+        except Exception:
+            pass
+    if added < fill:
+        if cached_dynamic_questions is not None:
+            dynamic = list(cached_dynamic_questions)
+        else:
+            try:
+                dynamic = generate_dynamic_questions(role_name, role_competencies, 2)
+            except Exception:
+                dynamic = []
+        for q in dynamic:
+            if added < fill:
+                added += add_if_new(q)
+    if added < fill:
+        bank = pick_bank_questions(role_competencies, (fill - added) + 4, role_name=role_name,
+                                    already_selected_ids={q["id"] for q in questions})
+        for q in bank:
+            if added < fill:
+                added += add_if_new(q)
+    return {"plan_version": 1, "questions": questions}
+
+
 def build_interview_plan(role_competencies: list[dict], role_name: str, evidence_profile: dict,
                           min_questions: int, max_questions: int,
-                          cached_dynamic_questions: list[dict] | None = None) -> dict:
+                          cached_dynamic_questions: list[dict] | None = None,
+                          hr_questions: list[dict] | None = None) -> dict:
     """cached_dynamic_questions: role-level LLM-generated questions (see Role.generated_questions)
     reused across every candidate for this role, so scores stay fairly comparable across
-    candidates instead of each person facing a different random set of questions."""
+    candidates instead of each person facing a different random set of questions.
+
+    hr_questions: questions the hiring team configured for this round. When present they take
+    priority over everything generated (see _build_plan_with_hr_questions)."""
+    if hr_questions:
+        return _build_plan_with_hr_questions(role_competencies, role_name, evidence_profile, min_questions,
+                                             cached_dynamic_questions, hr_questions)
     questions = [
         {"id": "p_intro", "type": "introduction", "question_text": None},
         {"id": "p_candidate_intro", "type": "candidate_introduction",
@@ -158,3 +217,7 @@ def build_interview_plan(role_competencies: list[dict], role_name: str, evidence
         "plan_version": 1,
         "questions": questions,
     }
+
+
+def warm_question_bank_embeddings() -> None:
+    warm_embedding_cache(QUESTION_BANK)

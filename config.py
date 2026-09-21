@@ -23,12 +23,8 @@ AGENT_SERVICE_KEY = os.getenv("AGENT_SERVICE_KEY", "")
 TTS_PROVIDER = os.getenv("TTS_PROVIDER", "edge").lower()
 TTS_VOICE = os.getenv("TTS_VOICE", "aditya")
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
-SARVAM_MODEL = os.getenv("SARVAM_MODEL", "bulbul:v3")
-SARVAM_SPEAKER = os.getenv("SARVAM_SPEAKER", "aditya")
-SARVAM_VOICE_ID = os.getenv("SARVAM_VOICE_ID", "svc-e6c0f0a8-9386-4eb2-8558-2fc0036f53a4")
-SARVAM_LANGUAGE_CODE = os.getenv("SARVAM_LANGUAGE_CODE", "en-IN")
-SARVAM_PACE = float(os.getenv("SARVAM_PACE", "1.0"))
-SARVAM_SAMPLE_RATE = int(os.getenv("SARVAM_SAMPLE_RATE", "22050"))
+# Voice settings (speaker, pace, language code, sample rate) live in voice_config.py, calibrated per
+# speaker; override with TTS_SPEAKER_OVERRIDE / TTS_PACE_OVERRIDE / TTS_GENDER / TTS_SAMPLE_RATE.
 
 
 

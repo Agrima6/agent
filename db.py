@@ -60,6 +60,18 @@ class Interview(Base):
     plan = Column(JSON)  # generated InterviewPlan
     room_name = Column(String)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    # --- interview behaviour (all optional; defaults live in code, not here) ---
+    depth_probe_enabled = Column(Integer, default=1)   # ask one deeper question after a strong answer
+    experience_level = Column(String, nullable=True)   # context for the speech composer only
+    # Per-interview voice overrides (voice_config.resolve_voice applies calibrated defaults otherwise).
+    voice_gender = Column(String, nullable=True)
+    voice_speaker = Column(String, nullable=True)
+    voice_pace = Column(Float, nullable=True)
+    voice_used = Column(JSON, nullable=True)           # the voice + TTS delivery stats actually used
+    # Server-side interview progress, written by the agent after every transition so a restarted
+    # agent worker resumes where the interview was instead of starting over:
+    # {"question_index": int, "followup_count": int, "small_talk_done": int, "phase": str}
+    progress = Column(JSON, nullable=True)
 
     candidate = relationship("Candidate")
     role = relationship("Role")
@@ -86,6 +98,11 @@ class InterviewTurn(Base):
     speaker = Column(String)  # "agent" | "candidate"
     text = Column(Text)
     is_followup = Column(Integer, default=0)
+    # What the candidate turn was (interaction_guard.Intent value: answer, request_hint, ...) and,
+    # for agent turns, which action produced it (FOLLOW_UP, NEXT_QUESTION, REDIRECT, ...). Scoring
+    # only counts candidate turns whose intent is empty/"answer".
+    intent = Column(String, nullable=True)
+    action = Column(String, nullable=True)
     started_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 
@@ -97,6 +114,9 @@ class CoverageResult(Base):
     covered_topics = Column(JSON)
     missing_topics = Column(JSON)
     coverage_score = Column(Float)
+    evaluation = Column(JSON, nullable=True)      # full validated evaluation (internal; never shown to candidates)
+    action = Column(String, nullable=True)        # the decision taken: FOLLOW_UP / CLARIFICATION / NEXT_QUESTION
+    followup_count = Column(Integer, nullable=True)
 
 
 # Report processing states (Workmate_production_scalable_fix_plan_v2.md §7). The frontend
@@ -131,38 +151,41 @@ class Report(Base):
     error = Column(Text, nullable=True)
 
 
+# Columns added after a table first shipped. create_all() only creates MISSING TABLES, never missing
+# columns on an existing one, so every column added later must be listed here to reach databases
+# (SQLite dev files and existing Postgres deployments alike) that already have the table.
+_COLUMN_PATCHES: dict[str, dict[str, str]] = {
+    "roles": {"generated_questions": "JSON"},
+    "interviews": {
+        "state_version": "INTEGER DEFAULT 0", "generation_id": "INTEGER DEFAULT 0",
+        "max_integrity_flags": "INTEGER DEFAULT 3", "integrity_flag_count": "INTEGER DEFAULT 0",
+        "depth_probe_enabled": "INTEGER DEFAULT 1", "experience_level": "VARCHAR",
+        "voice_gender": "VARCHAR", "voice_speaker": "VARCHAR", "voice_pace": "FLOAT",
+        "voice_used": "JSON", "progress": "JSON",
+    },
+    "reports": {"status": f"VARCHAR DEFAULT '{REPORT_READY}'", "error": "TEXT"},
+    "interview_turns": {"intent": "VARCHAR", "action": "VARCHAR"},
+    "coverage_results": {"evaluation": "JSON", "action": "VARCHAR", "followup_count": "INTEGER"},
+}
+
+
+def _patch_missing_columns() -> None:
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        for table, columns in _COLUMN_PATCHES.items():
+            if not inspector.has_table(table):
+                continue
+            existing = {c["name"] for c in inspector.get_columns(table)}
+            for name, ddl in columns.items():
+                if name not in existing:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+
+
 def init_db():
     Base.metadata.create_all(engine)
-    # create_all only creates missing tables, not missing columns on an existing table — patch
-    # in any new columns by hand. Only needed for the legacy sqlite file this repo used to ship
-    # with; a fresh Postgres database already gets the column from create_all above.
-    if engine.dialect.name == "sqlite":
-        with engine.connect() as conn:
-            from sqlalchemy import text
-            existing_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(roles)"))}
-            if "generated_questions" not in existing_cols:
-                conn.execute(text("ALTER TABLE roles ADD COLUMN generated_questions JSON"))
-                conn.commit()
-            interview_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(interviews)"))}
-            if "state_version" not in interview_cols:
-                conn.execute(text("ALTER TABLE interviews ADD COLUMN state_version INTEGER DEFAULT 0"))
-                conn.commit()
-            if "generation_id" not in interview_cols:
-                conn.execute(text("ALTER TABLE interviews ADD COLUMN generation_id INTEGER DEFAULT 0"))
-                conn.commit()
-            report_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(reports)"))}
-            if "status" not in report_cols:
-                conn.execute(text(f"ALTER TABLE reports ADD COLUMN status TEXT DEFAULT '{REPORT_READY}'"))
-                conn.commit()
-            if "error" not in report_cols:
-                conn.execute(text("ALTER TABLE reports ADD COLUMN error TEXT"))
-                conn.commit()
-            if "max_integrity_flags" not in interview_cols:
-                conn.execute(text("ALTER TABLE interviews ADD COLUMN max_integrity_flags INTEGER DEFAULT 3"))
-                conn.commit()
-            if "integrity_flag_count" not in interview_cols:
-                conn.execute(text("ALTER TABLE interviews ADD COLUMN integrity_flag_count INTEGER DEFAULT 0"))
-                conn.commit()
+    _patch_missing_columns()
 
 
 class ConcurrentTransitionError(Exception):

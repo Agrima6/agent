@@ -9,7 +9,7 @@ a real pgvector-backed SQL path now would be premature. The scoring/dedup/MMR lo
 part that matters and is identical either way; swapping the candidate-fetch step for a real
 `<=>` similarity query later is a small, isolated change if the bank grows large enough to need it.
 """
-from embeddings import cosine_similarity, embed_text
+from embeddings import cosine_similarity, embed_text, embed_texts
 
 # Two questions whose embeddings are this similar are treated as semantic duplicates and must
 # never both appear in the same interview plan (plan §6: "avoid semantically equivalent
@@ -19,6 +19,21 @@ SEMANTIC_DUPLICATE_THRESHOLD = 0.92
 # MMR trade-off between relevance to the query and diversity from already-selected questions.
 # Lower = more diverse, higher = more relevance-greedy.
 MMR_LAMBDA = 0.7
+
+
+def candidate_text(q: dict) -> str:
+    """The text a bank question is embedded as (shared by selection and the startup warm-up so the
+    warmed cache entries are exactly the ones selection will look up)."""
+    return f"{q['question_text']} {' '.join(q.get('competencies', []))}"
+
+
+def warm_embedding_cache(candidates: list[dict]) -> None:
+    """Embed the whole question bank in one call so the first interview created after startup is as
+    fast as every later one. Best-effort: failure just means the first interview pays the cost."""
+    try:
+        embed_texts([candidate_text(q) for q in candidates])
+    except Exception:
+        pass
 
 
 def metadata_filter(questions: list[dict], role_type: str) -> list[dict]:
@@ -86,11 +101,11 @@ def select_questions(candidates: list[dict], role_name: str, role_type: str, com
         return []
 
     filtered = metadata_filter(candidates, role_type)
-    embeddings_by_id = {q["id"]: embed_text(f"{q['question_text']} {' '.join(q.get('competencies', []))}")
-                         for q in filtered}
-
     query_text = f"{role_name} interview question covering: {', '.join(competency_keys)}"
-    query_embedding = embed_text(query_text)
+    # ONE embedding request for every candidate plus the query (was one sequential call each).
+    vectors = embed_texts([candidate_text(q) for q in filtered] + [query_text])
+    embeddings_by_id = {q["id"]: vec for q, vec in zip(filtered, vectors)}
+    query_embedding = vectors[-1]
 
     # Rank by relevance first so semantic_dedup keeps the MORE relevant half of any near-duplicate
     # pair, not an arbitrary one.
