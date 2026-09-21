@@ -45,7 +45,7 @@ services:
     <<: *agent-env
     # Bound to localhost: reach it through an SSH tunnel, a reverse proxy, or a security-group rule
     # that allows only your interview backend. Never expose it to the whole internet.
-    ports: ["127.0.0.1:8000:8000"]
+    ports: ["127.0.0.1:${API_HOST_PORT:-8000}:8000"]   # host side is configurable if 8000 is already in use
     depends_on:
       postgres: { condition: service_healthy }
     healthcheck:
