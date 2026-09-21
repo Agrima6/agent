@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .env
 workmate.db
+
+# production secrets - never commit
+.env.production
+deploy/.env.production

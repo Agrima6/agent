@@ -1,0 +1,70 @@
+# Production stack for the AI interview agent on ONE server (EC2).
+#
+#   docker compose --env-file .env.production up -d --build
+#
+# postgres  - the agent's own database (interviews, turns, plans)
+# api       - FastAPI service the interview backend (client-service) calls
+# worker    - the LiveKit voice worker: connects OUT to LiveKit, joins each interview room, talks
+#
+# The API and the worker are separate containers on purpose: the worker restarts by itself if it dies
+# (the inline-subprocess mode does not), and workers scale independently:  docker compose up -d --scale worker=2
+name: workmate-agent
+
+x-agent-env: &agent-env
+  env_file: .env.production
+  environment: &agent-vars
+    DATABASE_URL: postgresql://agent:${POSTGRES_PASSWORD}@postgres:5432/agent
+    API_BASE_URL: http://api:8000          # how the worker reaches the API (inside the compose network)
+    RUN_AGENT_INLINE: "false"              # the worker runs as its own container, not as a subprocess of the API
+    PYTHONUNBUFFERED: "1"
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "20m", max-file: "5" }     # bounded, so logs can never fill the disk
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: agent
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging: *logging
+
+  api:
+    build: { context: .. }
+    image: workmate-agent:latest
+    restart: always
+    <<: *agent-env
+    # Bound to localhost: reach it through an SSH tunnel, a reverse proxy, or a security-group rule
+    # that allows only your interview backend. Never expose it to the whole internet.
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/docs', timeout=4)"]
+      interval: 15s
+      timeout: 6s
+      retries: 6
+      start_period: 40s
+    logging: *logging
+
+  worker:
+    image: workmate-agent:latest
+    restart: always
+    <<: *agent-env
+    command: ["python", "agent.py", "start"]      # production mode (not `dev`)
+    depends_on:
+      api: { condition: service_healthy }
+    stop_grace_period: 300s                        # on redeploy, let interviews already in progress finish
+    logging: *logging
+
+volumes:
+  pgdata:
