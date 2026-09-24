@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import time
+from collections import deque
 
 import httpx
 from livekit import rtc
@@ -28,7 +29,7 @@ from livekit.plugins import openai as lk_openai
 from livekit.plugins import silero
 
 from conductor import InterviewConductor, Speech
-from config import API_BASE_URL, ELEVENLABS_API_KEY, GROQ_API_KEY, OPENAI_API_KEY, SARVAM_API_KEY, TTS_PROVIDER, TTS_VOICE
+from config import AGENT_NAME, API_BASE_URL, ELEVENLABS_API_KEY, GROQ_API_KEY, OPENAI_API_KEY, SARVAM_API_KEY, TTS_PROVIDER, TTS_VOICE
 from edge_tts_plugin import EdgeTTS
 from languages import LANGUAGE_CONFIGS, normalize_language
 import refusals
@@ -44,7 +45,9 @@ from voice_config import VoiceConfig, resolve_voice
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("workmate-agent")
 
-AGENT_NAME = "workmate-interviewer"
+
+CANDIDATE_WAIT_S = float(os.getenv("CANDIDATE_WAIT_S") or 45)      # max wait for the candidate before greeting anyway
+CANDIDATE_SETTLE_S = float(os.getenv("CANDIDATE_SETTLE_S") or 1.2)  # let their browser subscribe to the audio first
 
 # Never sent to an LLM (the session has none). LiveKit's Agent requires the field.
 _AGENT_DESCRIPTION = "Controlled interview conductor: every spoken turn is produced and validated by the interview engine."
@@ -89,16 +92,24 @@ def make_turn_handling() -> dict:
 
 class InterviewerAgent(Agent):
     def __init__(self, runner: InterviewRunner, *, language: str, role: str, experience_level: str,
-                 plain_language: bool, interviewer_name: str = "Aarav", publish=None):
+                 plain_language: bool, interviewer_name: str = "Aarav", publish=None, candidate_ready=None):
         super().__init__(instructions=_AGENT_DESCRIPTION)
         self.runner = runner
         self._publish = publish   # async (sender, text) -> None: live transcript to the candidate's screen
         self._caption_tasks: set = set()
+        # Awaitable that returns once a candidate is actually in the room (see entrypoint). Without it the
+        # greeting is spoken the moment the interviewer joins - into an empty room if the candidate is slower.
+        self._candidate_ready = candidate_ready
+        # Every caption line so far (bounded). Data messages are not replayed to late joiners, so this is
+        # re-sent when a candidate connects; otherwise a reload or reconnect leaves the Transcript tab empty.
+        self._caption_log: deque = deque(maxlen=200)
         self.conductor = InterviewConductor(
             runner, self._speak, language=language, role=role, experience_level=experience_level,
             plain_language=plain_language, interviewer_name=interviewer_name)
 
     async def on_enter(self):
+        if self._candidate_ready is not None:
+            await self._candidate_ready()
         await self.conductor.start()
 
     def _publish_line(self, sender: str, text: str) -> None:
@@ -106,16 +117,34 @@ class InterviewerAgent(Agent):
         runs as its own task, and a failed caption must never affect the interview."""
         if not (self._publish and text and text.strip()):
             return
+        line = (sender, text.strip(), time.time())
+        self._caption_log.append(line)
+        self._spawn_caption(*line)
 
+    def _spawn_caption(self, sender: str, text: str, ts: float) -> None:
         async def _send() -> None:
             try:
-                await self._publish(sender, text.strip())
+                await self._publish(sender, text, ts)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("transcript publish failed: %s", exc)
 
         task = asyncio.get_running_loop().create_task(_send())
         self._caption_tasks.add(task)
         task.add_done_callback(self._caption_tasks.discard)
+
+    async def replay_captions(self) -> int:
+        """Re-send the caption history, in order, to a candidate who just connected. Returns the count."""
+        if not self._publish:
+            return 0
+        sent = 0
+        for sender, text, ts in list(self._caption_log):
+            try:
+                await self._publish(sender, text, ts)
+                sent += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("caption replay stopped: %s", exc)
+                break
+        return sent
 
     async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
         heard = new_message.text_content or ""
@@ -226,20 +255,48 @@ async def entrypoint(ctx: JobContext):
         # interview - the next connection resumes it from the server-held progress.
         session.on("close", lambda event: runner.done.set())
 
-        async def publish_transcript(sender: str, text: str) -> None:
+        async def publish_transcript(sender: str, text: str, ts: float | None = None) -> None:
             # The candidate room's transcript tab listens for this topic and payload shape.
             await ctx.room.local_participant.publish_data(
-                json.dumps({"sender": sender, "text": text, "timestamp": time.time()}),
+                json.dumps({"sender": sender, "text": text, "timestamp": ts or time.time()}),
                 reliable=True, topic="transcript")
 
-        await session.start(
-            agent=InterviewerAgent(runner, language=language, role=role_name,
-                                   experience_level=data.get("experience_level") or "",
-                                   plain_language=plain_language,
-                                   interviewer_name=INTERVIEWER_NAMES.get(voice.gender, "Aarav"),
-                                   publish=publish_transcript),
-            room=ctx.room,
-        )
+        def candidate_in_room() -> bool:
+            return any(p.kind == rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+                       for p in ctx.room.remote_participants.values())
+
+        async def wait_for_candidate() -> None:
+            """Greet only once a candidate is in the room, plus a moment for their browser to subscribe to
+            the interviewer's audio. Bounded, so a candidate who never arrives can't hang the job."""
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + CANDIDATE_WAIT_S
+            while loop.time() < deadline:
+                if candidate_in_room():
+                    await asyncio.sleep(CANDIDATE_SETTLE_S)
+                    return
+                await asyncio.sleep(0.25)
+            logger.warning("no candidate joined %s within %.0fs - greeting anyway", ctx.room.name, CANDIDATE_WAIT_S)
+
+        interviewer = InterviewerAgent(runner, language=language, role=role_name,
+                                       experience_level=data.get("experience_level") or "",
+                                       plain_language=plain_language,
+                                       interviewer_name=INTERVIEWER_NAMES.get(voice.gender, "Aarav"),
+                                       publish=publish_transcript, candidate_ready=wait_for_candidate)
+
+        def on_participant_connected(participant) -> None:
+            if participant.kind != rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD:
+                return
+
+            async def _replay() -> None:
+                await asyncio.sleep(1.0)               # let the new participant's data channel open
+                count = await interviewer.replay_captions()
+                if count:
+                    logger.info("replayed %d caption line(s) to %s", count, participant.identity)
+
+            asyncio.get_running_loop().create_task(_replay())
+
+        ctx.room.on("participant_connected", on_participant_connected)
+        await session.start(agent=interviewer, room=ctx.room)
         runner.record_tts_metadata_nowait({"voice": voice.as_dict(), "resumed": resumed})
 
         def on_data_received(packet):

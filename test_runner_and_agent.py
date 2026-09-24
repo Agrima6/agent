@@ -279,11 +279,12 @@ async def test_spoken_lines_are_published_to_the_candidates_live_transcript():
     agent, session, sink, calls, _, client, _ = await started_agent()
     sent = []
 
-    async def publish(sender, text):
+    async def publish(sender, text, ts=None):
         sent.append((sender, text))
 
     agent._publish = publish
     await asyncio.wait_for(agent._speak(Speech("Tell me about a project you are proud of.", "NEXT_QUESTION")), 10)
+    await asyncio.sleep(0.05)                                   # captions are sent from a background task
     assert sent == [("agent", "Tell me about a project you are proud of.")]
     await session.aclose()
     await client.aclose()
@@ -298,5 +299,65 @@ async def test_a_failing_transcript_publish_never_breaks_the_interview():
     agent._publish = broken
     await asyncio.wait_for(agent._speak(Speech("What did you build?", "NEXT_QUESTION")), 10)
     assert calls and bytes(sink.pcm)                           # still spoken
+    await session.aclose()
+    await client.aclose()
+
+
+async def test_the_greeting_waits_until_a_candidate_is_in_the_room():
+    agent, session, sink, calls, _, client, _ = await started_agent()
+    gate = asyncio.Event()
+    order: list[str] = []
+
+    async def candidate_ready():
+        order.append("waiting")
+        await gate.wait()
+        order.append("candidate arrived")
+
+    async def fake_start():
+        order.append("greeting spoken")
+
+    agent._candidate_ready = candidate_ready
+    agent.conductor.start = fake_start
+    entering = asyncio.create_task(agent.on_enter())
+    await asyncio.sleep(0.1)
+    assert order == ["waiting"], "the interviewer spoke before any candidate was present"
+    gate.set()
+    await asyncio.wait_for(entering, 2)
+    assert order == ["waiting", "candidate arrived", "greeting spoken"]
+    await session.aclose()
+    await client.aclose()
+
+
+async def test_a_candidate_who_connects_later_receives_the_caption_history_in_order():
+    agent, session, sink, calls, _, client, _ = await started_agent()
+    sent = []
+
+    async def publish(sender, text, ts=None):
+        sent.append((sender, text, ts))
+
+    agent._publish = publish
+    agent._publish_line("agent", "Hello, welcome to your interview.")
+    agent._publish_line("candidate", "Thank you.")
+    await asyncio.sleep(0.05)
+    sent.clear()                                                # what the FIRST candidate already saw live
+    replayed = await agent.replay_captions()                    # a candidate (re)connecting now
+    assert replayed == 2
+    assert [(a, b) for a, b, _ in sent] == [("agent", "Hello, welcome to your interview."), ("candidate", "Thank you.")]
+    assert all(ts for _, _, ts in sent)                         # original timestamps are kept
+    await session.aclose()
+    await client.aclose()
+
+
+async def test_the_caption_history_is_bounded_and_a_failing_publish_never_breaks_it():
+    agent, session, sink, calls, _, client, _ = await started_agent()
+
+    async def broken(sender, text, ts=None):
+        raise RuntimeError("data channel closed")
+
+    agent._publish = broken
+    for i in range(500):
+        agent._publish_line("agent", f"line {i}")
+    assert len(agent._caption_log) == 200 and agent._caption_log[-1][1] == "line 499"
+    assert await agent.replay_captions() == 0                   # fails quietly, no exception
     await session.aclose()
     await client.aclose()

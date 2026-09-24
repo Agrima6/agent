@@ -20,6 +20,9 @@ API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 # (api.py). Unset by default so local dev keeps working without extra config; set it before
 # exposing the API beyond localhost — see api.py's require_service_key().
 AGENT_SERVICE_KEY = os.getenv("AGENT_SERVICE_KEY", "")
+# Name the worker registers under in LiveKit and the API dispatches to. Change it only to run a second,
+# separate worker (e.g. a test one) against the same LiveKit project without stealing production jobs.
+AGENT_NAME = os.getenv("AGENT_NAME", "workmate-interviewer")
 TTS_PROVIDER = os.getenv("TTS_PROVIDER", "edge").lower()
 TTS_VOICE = os.getenv("TTS_VOICE", "aditya")
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")

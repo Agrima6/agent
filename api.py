@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -11,14 +12,13 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from livekit import api as lk_api
 
-from config import LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, AGENT_SERVICE_KEY
+from config import AGENT_NAME, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, AGENT_SERVICE_KEY
 
 logger = logging.getLogger("workmate-api")
 
 # Must match agent.py's WorkerOptions(agent_name=...) — LiveKit Cloud requires explicit
 # dispatch (rather than implicit any-worker dispatch) for projects with the Agents feature
 # enabled, otherwise the worker never receives a job for the room.
-AGENT_NAME = "workmate-interviewer"
 import states
 from db import (
     init_db, get_db, SessionLocal, Role, Candidate, Interview, InterviewTurn, Report, CoverageResult,
@@ -367,20 +367,35 @@ async def _agent_already_active(lk, room_name: str) -> bool:
     return False
 
 
-async def _ensure_agent_dispatched(room_name: str):
+async def _ensure_agent_dispatched(room_name: str) -> bool:
     """Explicitly dispatch the interviewer agent to this room, exactly once. Without dispatch, a
     LiveKit Cloud project with the Agents feature enabled never routes a job to the worker (it
-    silently sits idle waiting for a job that never comes)."""
+    silently sits idle waiting for a job that never comes).
+
+    Returns True when an interviewer is (or will be) in the room. A failure is logged as an ERROR with
+    the cause and retried once: swallowing it as a mild warning used to leave the candidate in an empty
+    room with nothing in the logs to explain why no interviewer ever joined.
+    """
     lk = lk_api.LiveKitAPI(LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
     try:
-        if await _agent_already_active(lk, room_name):
-            logger.info("agent already active in %s - not dispatching a second interviewer", room_name)
-            return
-        await lk.agent_dispatch.create_dispatch(
-            lk_api.CreateAgentDispatchRequest(agent_name=AGENT_NAME, room=room_name)
-        )
-    except Exception as e:
-        logger.warning(f"agent dispatch create failed (may already exist): {e}")
+        for attempt in (1, 2):
+            try:
+                if await _agent_already_active(lk, room_name):
+                    logger.info("agent already active in %s - not dispatching a second interviewer", room_name)
+                    return True
+                await lk.agent_dispatch.create_dispatch(
+                    lk_api.CreateAgentDispatchRequest(agent_name=AGENT_NAME, room=room_name)
+                )
+                logger.info("dispatched agent %r to room %s", AGENT_NAME, room_name)
+                return True
+            except Exception as e:
+                if "already exists" in str(e).lower():
+                    return True
+                logger.error("agent dispatch FAILED for room %s (attempt %d/2): %s: %s",
+                             room_name, attempt, type(e).__name__, e)
+                if attempt == 1:
+                    await asyncio.sleep(0.6)
+        return False
     finally:
         await lk.aclose()
 
@@ -396,8 +411,8 @@ async def candidate_token(interview_id: str, db: Session = Depends(get_db)):
         transition_interview(db, interview, states.READY, reason="candidate token issued")
     identity = f"candidate-{interview.candidate_id}"
     jwt = _mint_token(interview.room_name, identity, interview.candidate.name)
-    await _ensure_agent_dispatched(interview.room_name)
-    return {"token": jwt, "url": LIVEKIT_URL, "room_name": interview.room_name}
+    dispatched = await _ensure_agent_dispatched(interview.room_name)
+    return {"token": jwt, "url": LIVEKIT_URL, "room_name": interview.room_name, "agent_dispatched": dispatched}
 
 
 @app.post("/v1/interviews/{interview_id}/start", dependencies=[Depends(require_service_key)])
@@ -512,7 +527,8 @@ def list_integrity_events(interview_id: str, db: Session = Depends(get_db)):
 def get_transcript(interview_id: str, db: Session = Depends(get_db)):
     turns = db.query(InterviewTurn).filter(InterviewTurn.interview_id == interview_id).order_by(InterviewTurn.started_at).all()
     return [{"question_id": t.question_id, "speaker": t.speaker, "text": t.text, "is_followup": bool(t.is_followup),
-             "intent": t.intent, "action": t.action} for t in turns]
+             "intent": t.intent, "action": t.action, "at": t.started_at.isoformat() if t.started_at else None}
+            for t in turns]
 
 
 def _run_scoring_job(interview_id: str, report_id: str):

@@ -79,7 +79,7 @@ docker compose logs worker | grep "registered worker"
 **Quick and secure, no config change** (good for a demo): from the machine running client-service,
 
 ```bash
-ssh -N -L 8000:127.0.0.1:8000 ubuntu@<server-ip>
+ssh -N -L 8000:127.0.0.1:8010 ubuntu@<server-ip>      # 8010 = API_HOST_PORT on the server (use 8000 if it is free there)
 ```
 
 client-service keeps `AGENT_SERVICE_URL=http://localhost:8000`, and stop the local agent so the port is free.
@@ -116,12 +116,20 @@ On update, the worker's 5-minute stop grace period lets interviews already in pr
   prebuilt Linux wheel for Python 3.12 (x86_64 and arm64), checked by resolving them for both.
 - Not verified here: a full image build and a live interview on the server. Do both once (steps 5 and 7).
 
-## 10. Troubleshooting
+## 10. Keep local and server agents apart
+
+Your Mac and the server share one LiveKit project. If both use the same agent name, an interview created by the
+**local** API can be picked up by the **server** worker (or the reverse); the worker then looks the interview up in
+the wrong database, finds nothing, and no interviewer ever speaks. Always give the server its own name
+(`AGENT_NAME=workmate-prod` in `.env.production`) and keep the default name for local development. Never run a
+local agent API on port 8000 while the SSH tunnel is supposed to own that port.
+
+## 11. Troubleshooting
 
 | Symptom | Likely cause / fix |
 |---|---|
 | `failed to connect to livekit, retrying` | outbound 443 blocked, or a brief DNS problem; it retries by itself. Check `curl -I $LIVEKIT_URL` from the server |
 | worker exits at once | missing/invalid `LIVEKIT_*` values; read `docker compose logs worker` |
-| interviewer never joins | worker not `registered`; or the API refuses the backend (`AGENT_SERVICE_KEY` mismatch) |
+| interviewer never joins | worker not `registered`; the API refuses the backend (`AGENT_SERVICE_KEY` mismatch); a local agent API is answering on port 8000 instead of the tunnel; or `docker compose logs api` shows `agent dispatch FAILED` |
 | voice still choppy | check `docker stats` for CPU/RAM, then `turn_trace` for which stage is slow |
 | out of disk | logs are capped; check `docker system df` and remove old images |
