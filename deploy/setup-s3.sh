@@ -14,14 +14,19 @@ cp "$ENV" "$ENV.bak6.$(date +%F)"
 umask 077
 [ -f /root/s3.env ] || printf 'S3_USER=wmiq%s\nS3_PASS=%s\n' "$(openssl rand -hex 6)" "$(openssl rand -hex 24)" > /root/s3.env
 . /root/s3.env
-cat > /root/s3.json <<JSON
+# The container runs as a non-root user, so the file must be world-readable - but it lives in a root-only
+# directory (700), so no other user on the host can reach it.
+install -d -m 700 /opt/seaweed-config
+rm -f /root/s3.json
+cat > /opt/seaweed-config/s3.json <<JSON
 {"identities":[{"name":"app","credentials":[{"accessKey":"$S3_USER","secretKey":"$S3_PASS"}],"actions":["Admin","Read","Write","List","Tagging"]}]}
 JSON
-install -d -m 700 /opt/seaweed-data
+chmod 644 /opt/seaweed-config/s3.json
+install -d -m 777 /opt/seaweed-data
 
 docker rm -f s3store >/dev/null 2>&1 || true
 docker run -d --name s3store --restart unless-stopped -p 127.0.0.1:9000:8333 \
-  -v /opt/seaweed-data:/data -v /root/s3.json:/etc/s3.json:ro \
+  -v /opt/seaweed-data:/data -v /opt/seaweed-config/s3.json:/etc/s3.json:ro \
   chrislusf/seaweedfs server -dir=/data -s3 -s3.config=/etc/s3.json >/dev/null
 echo "waiting for storage to accept requests..."
 ready=0
