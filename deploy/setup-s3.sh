@@ -23,15 +23,25 @@ docker rm -f s3store >/dev/null 2>&1 || true
 docker run -d --name s3store --restart unless-stopped -p 127.0.0.1:9000:8333 \
   -v /opt/seaweed-data:/data -v /root/s3.json:/etc/s3.json:ro \
   chrislusf/seaweedfs server -dir=/data -s3 -s3.config=/etc/s3.json >/dev/null
-echo "waiting for storage..."; sleep 20
+echo "waiting for storage to accept requests..."
+ready=0
+for i in $(seq 1 45); do
+  if curl -s -o /dev/null --max-time 3 http://127.0.0.1:9000/; then ready=1; break; fi
+  sleep 2
+done
+if [ "$ready" != 1 ]; then echo "STORAGE NOT READY - container logs:"; docker logs --tail 40 s3store; echo "Nothing was written to the service env."; exit 1; fi
+sleep 5
 
 aws() { docker run --rm --network host -v /tmp:/tmp -e AWS_ACCESS_KEY_ID="$S3_USER" -e AWS_SECRET_ACCESS_KEY="$S3_PASS" \
   -e AWS_DEFAULT_REGION=us-east-1 amazon/aws-cli --endpoint-url http://127.0.0.1:9000 "$@"; }
-aws s3 mb "s3://$BUCKET" || true
+fail() { echo "STORAGE TEST FAILED: $1 - container logs:"; docker logs --tail 40 s3store; echo "Nothing was written to the service env."; exit 1; }
+aws s3 mb "s3://$BUCKET" 2>/dev/null || aws s3 ls "s3://$BUCKET" >/dev/null || fail "cannot create or see the bucket"
 echo "round-trip-ok" > /tmp/s3-test.txt
-aws s3 cp /tmp/s3-test.txt "s3://$BUCKET/_test.txt" >/dev/null
-echo "read back: $(aws s3 cp "s3://$BUCKET/_test.txt" - )"
+aws s3 cp /tmp/s3-test.txt "s3://$BUCKET/_test.txt" >/dev/null || fail "upload"
+back=$(aws s3 cp "s3://$BUCKET/_test.txt" - ) || fail "download"
+[ "$back" = "round-trip-ok" ] || fail "read-back mismatch"
 aws s3 rm "s3://$BUCKET/_test.txt" >/dev/null
+echo "storage round-trip OK"
 
 for kv in "AWS_ACCESS_KEY_ID=$S3_USER" "AWS_SECRET_ACCESS_KEY=$S3_PASS" "AWS_REGION=us-east-1" \
   "S3_ENDPOINT=http://127.0.0.1:9000" "S3_FORCE_PATH_STYLE=true" "S3_BUCKET_NAME=$BUCKET" \
