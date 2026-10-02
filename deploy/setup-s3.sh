@@ -22,7 +22,7 @@ cat > /opt/seaweed-config/s3.json <<JSON
 {"identities":[{"name":"app","credentials":[{"accessKey":"$S3_USER","secretKey":"$S3_PASS"}],"actions":["Admin","Read","Write","List","Tagging"]}]}
 JSON
 chmod 644 /opt/seaweed-config/s3.json
-install -d -m 777 /opt/seaweed-data
+install -d -m 700 /opt/seaweed-data
 
 docker rm -f s3store >/dev/null 2>&1 || true
 docker run -d --name s3store --restart unless-stopped -p 127.0.0.1:9000:8333 \
