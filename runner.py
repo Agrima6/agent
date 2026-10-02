@@ -17,6 +17,7 @@ import time
 import httpx
 
 from config import AGENT_SERVICE_KEY, API_BASE_URL
+from focus import followup_limit
 from policy import QuestionState
 
 logger = logging.getLogger("interview-runner")
@@ -66,9 +67,12 @@ class InterviewRunner:
 
     # ------------------------------------------------------------------ state
     def _new_question_state(self, question: dict) -> QuestionState:
+        priority = question.get("focus_priority")
         return QuestionState(
             question_id=question["id"], topic=question_topic(question),
-            coverage_threshold=self.coverage_threshold, max_followups=self.max_followups_per_question,
+            focus=question.get("focus") or "", focus_priority=priority or "",
+            coverage_threshold=self.coverage_threshold,
+            max_followups=followup_limit(self.max_followups_per_question, priority),
             max_seconds=int(question.get("time_limit") or DEFAULT_QUESTION_SECONDS),
             depth_probe_enabled=self.depth_probe_enabled,
         )

@@ -133,9 +133,10 @@ class InterviewConductor:
     async def _judge(self, q: dict, text: str, topic: str) -> Evaluation:
         turn_trace.mark("judge_start")
         try:
+            context = {k: q[k] for k in ("claim", "focus") if q.get(k)}     # only when present: keeps simple judges working
             return await asyncio.wait_for(asyncio.to_thread(
                 self.judge, q["question_text"], list(q.get("expected_topics") or []), text,
-                topic=topic, role=self.role), JUDGE_DEADLINE)
+                topic=topic, role=self.role, **context), JUDGE_DEADLINE)
         except asyncio.TimeoutError:
             logger.warning("judge missed its %.0fs deadline interview=%s - moving on without a follow-up",
                            JUDGE_DEADLINE, self.runner.interview_id)

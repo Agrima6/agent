@@ -26,6 +26,8 @@ from db import (
     REPORT_PENDING, REPORT_PROCESSING, REPORT_READY, REPORT_FAILED,
 )
 from resume_parser import extract_text_from_pdf, parse_resume
+from focus import build_focus_areas
+from intelligence_report import build_intelligence
 from planner import build_interview_plan, generate_dynamic_questions, warm_question_bank_embeddings
 from scoring import score_answer_content, score_communication, aggregate_final_score, generate_overall_summary
 from roles import competencies_for_role, detect_role_type
@@ -126,6 +128,23 @@ async def upload_resume(candidate_id: str, file: UploadFile = File(...), db: Ses
 MAX_HR_QUESTIONS = 20
 
 
+MAX_FOCUS_INPUT = 30
+
+
+def _parse_focus_areas(raw: str, role_competencies: list[dict]):
+    """HR's weighted skills / priorities for the round: JSON list of {name, weight?, priority?, note?}.
+    Malformed input is rejected (HR intent must not be silently dropped); junk items inside are ignored."""
+    if not raw or not raw.strip():
+        return build_focus_areas(None, role_competencies)
+    try:
+        items = json.loads(raw)
+    except ValueError:
+        raise HTTPException(422, "focus_areas must be valid JSON")
+    if not isinstance(items, list) or len(items) > MAX_FOCUS_INPUT:
+        raise HTTPException(422, f"focus_areas must be a list of at most {MAX_FOCUS_INPUT} items")
+    return build_focus_areas(items, role_competencies)
+
+
 def _parse_hr_questions(raw: str, role_competencies: list[dict]) -> list[dict]:
     """HR-configured questions arrive as a JSON list of {id?, text, topic?, time_limit?}. They are
     validated and normalised into plan questions here; a malformed payload is rejected outright
@@ -173,6 +192,7 @@ def _validated_voice(gender: str, speaker: str, pace: float | None) -> dict:
 def create_interview(candidate_id: str = Form(...), role_id: str = Form(...),
                       duration_minutes: int = Form(30),
                       hr_questions: str = Form(""), questions_json: str = Form(""),
+                      focus_areas: str = Form(""),
                       experience_level: str = Form(""),
                       max_followups_per_question: int | None = Form(None),
                       coverage_threshold: float | None = Form(None),
@@ -186,6 +206,7 @@ def create_interview(candidate_id: str = Form(...), role_id: str = Form(...),
         raise HTTPException(404, "candidate or role not found")
 
     hr_question_list = _parse_hr_questions(hr_questions or questions_json, role.competencies)
+    focus_list = _parse_focus_areas(focus_areas, role.competencies)
     if max_followups_per_question is not None and not 0 <= max_followups_per_question <= 5:
         raise HTTPException(422, "max_followups_per_question must be between 0 and 5")
     if coverage_threshold is not None and not 0.3 <= coverage_threshold <= 0.95:
@@ -210,6 +231,7 @@ def create_interview(candidate_id: str = Form(...), role_id: str = Form(...),
         max_questions=7,
         cached_dynamic_questions=role.generated_questions,
         hr_questions=hr_question_list,
+        focus_areas=focus_list,
     )
 
     extra = {}
@@ -590,9 +612,16 @@ def _run_scoring_job(interview_id: str, report_id: str):
 
         report.final_score = agg["final_score"]
         report.competency_scores = agg["competency_scores"]
+        coverage_rows = [{"question_id": c.question_id, "followup_count": c.followup_count, "evaluation": c.evaluation}
+                         for c in db.query(CoverageResult).filter(CoverageResult.interview_id == interview_id).all()]
+        try:
+            intelligence = build_intelligence(interview.plan, question_reports, coverage_rows)
+        except Exception:
+            logger.exception("intelligence section failed; report is still produced")
+            intelligence = {}
         report.content = {
             "questions": question_reports, "candidate": interview.candidate.name,
-            "role": interview.role.name, "overall": overall,
+            "role": interview.role.name, "overall": overall, **intelligence,
         }
         report.status = REPORT_READY
         db.commit()

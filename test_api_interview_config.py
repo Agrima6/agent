@@ -359,3 +359,24 @@ def test_client_service_questions_json_alias_is_accepted():
     from api import _parse_hr_questions
     out = _parse_hr_questions('[{"text": "Tell me about a hard bug you fixed.", "topic": "debugging", "timeLimit": 90}]', [])
     assert out[0]["question_text"].startswith("Tell me about a hard bug") and out[0]["time_limit"] == 90
+
+
+# ------------------------------------------------------------------ HR focus areas
+FOCUS = [{"name": "Production debugging", "weight": 70}, {"name": "Communication", "weight": 5}]
+
+
+def test_hr_focus_areas_shape_the_plan_and_are_stored_with_it(client, role_and_candidate, monkeypatch):
+    monkeypatch.setattr(planner, "structured_json", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no LLM")))
+    role_id, cand_id = role_and_candidate
+    r = create(client, role_id, cand_id, focus_areas=json.dumps(FOCUS))
+    assert r.status_code == 200
+    plan = r.json()["plan"]
+    areas = {a["name"]: a for a in plan["focus_areas"]}
+    assert areas["Production debugging"]["priority"] == "HIGH" and areas["Communication"]["priority"] == "LOW"
+    assert any(q.get("focus") == "Production debugging" for q in plan["questions"])      # HIGH area is always asked
+
+
+@pytest.mark.parametrize("bad", ["{not json", json.dumps({"a": 1}), json.dumps([{"name": "x"}] * 31)])
+def test_malformed_focus_areas_are_rejected_not_ignored(client, role_and_candidate, bad):
+    role_id, cand_id = role_and_candidate
+    assert create(client, role_id, cand_id, focus_areas=bad).status_code == 422

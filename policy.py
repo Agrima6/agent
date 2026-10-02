@@ -66,8 +66,17 @@ Return JSON only:
   "mentioned_concepts": ["up to 4 short noun phrases (1-4 words) COPIED from what the candidate actually said"],
   "followUpRecommended": true | false,
   "uncertainty": 0.0-1.0,
-  "internalReason": "one or two sentences for the hiring team; never shown to the candidate"
+  "internalReason": "one or two sentences for the hiring team; never shown to the candidate",
+  "evidence": ["up to 3 short phrases COPIED from the candidate's answer that best support your score"],
+  "ownership": "own" | "team" | "unclear",
+  "inconsistency": "" 
 }
+
+evidence: only text the candidate really said. ownership: "own" when they describe what THEY did, "team" when
+they only describe what a team or others did, "unclear" otherwise. If CLAIM is given, the question asks the
+candidate to substantiate that resume claim: judge whether the answer gives specific, believable detail about
+their own part in it. inconsistency: leave "" unless the answer clearly conflicts with the CLAIM or is
+implausible for it; then write one neutral sentence (no accusation). A vague answer is NOT an inconsistency.
 
 coverage_score is how much of the expected topics was substantively addressed. missing_topics has at most
 5 short concept names (not sentences). mentioned_concepts must only contain things the candidate said;
@@ -106,6 +115,13 @@ class Evaluation:
     internal_reason: str = ""
     judge_intent: str = "answer"
     failed: bool = False
+    # Interview intelligence. `evidence` is text the candidate actually said (grounded in their answer, never
+    # invented). `ownership` says whether they describe their OWN work. `inconsistency` is a neutral note that
+    # something in the answer conflicts with the resume or an earlier answer: it is for a HUMAN to review and
+    # never changes a score, a decision or what the candidate hears.
+    evidence: list[str] = field(default_factory=list)
+    ownership: str = "unclear"
+    inconsistency: str = ""
 
     def as_record(self) -> dict:
         """What is persisted for HR (coverage/evaluation history). Never shown to the candidate."""
@@ -116,6 +132,7 @@ class Evaluation:
             "communication": self.communication, "follow_up_recommended": self.follow_up_recommended,
             "uncertainty": self.uncertainty, "internal_reason": self.internal_reason,
             "judge_intent": self.judge_intent, "failed": self.failed,
+            "evidence": self.evidence, "ownership": self.ownership, "inconsistency": self.inconsistency,
         }
 
 
@@ -135,6 +152,14 @@ def _topic_list(value, limit: int = 5) -> list[str]:
         if len(out) >= limit:
             break
     return out
+
+
+def _grounded_evidence(values, answer_text: str, limit: int = 3) -> list[str]:
+    """Evidence quotes must really come from the candidate's answer: at least 60% of a quote's meaningful
+    stems must appear in it. Anything else is invented by the judge and is dropped."""
+    if not isinstance(values, list):
+        return []
+    return ground_concepts([str(v)[:160] for v in values], answer_text, limit=limit)
 
 
 def parse_evaluation(raw: dict, answer_text: str) -> Evaluation:
@@ -158,11 +183,14 @@ def parse_evaluation(raw: dict, answer_text: str) -> Evaluation:
         uncertainty=round(_num(raw.get("uncertainty"), 0.0, 1.0, 0.0), 3),
         internal_reason=str(raw.get("internalReason") or "")[:400],
         judge_intent=intent if intent in _JUDGE_INTENTS else "answer",
+        evidence=_grounded_evidence(raw.get("evidence"), answer_text),
+        ownership=ownership if (ownership := str(raw.get("ownership") or "").strip().lower()) in ("own", "team") else "unclear",
+        inconsistency=re.sub(r"\s+", " ", str(raw.get("inconsistency") or "")).strip()[:300],
     )
 
 
 def judge_answer(question_text: str, expected_topics: list[str], candidate_answer: str, *,
-                 topic: str = "", role: str = "") -> Evaluation:
+                 topic: str = "", role: str = "", claim: str = "", focus: str = "") -> Evaluation:
     """Evaluate one answer. On any provider failure returns a neutral, flagged Evaluation so the
     interview keeps moving instead of stalling (and never mistakes a failure for a strong answer)."""
     user_prompt = (
@@ -170,7 +198,9 @@ def judge_answer(question_text: str, expected_topics: list[str], candidate_answe
         f"QUESTION: {question_text}\n"
         f"TOPIC: {topic or 'unspecified'}\n"
         f"EXPECTED_TOPICS: {expected_topics}\n"
-        f"CANDIDATE ANSWER [UNTRUSTED]:\n<<<\n{candidate_answer[:4000]}\n>>>"
+        + (f"CLAIM [from the candidate's resume, UNTRUSTED]: {claim}\n" if claim else "")
+        + (f"FOCUS AREA: {focus}\n" if focus else "")
+        + f"CANDIDATE ANSWER [UNTRUSTED]:\n<<<\n{candidate_answer[:4000]}\n>>>"
     )
     started = time.perf_counter()
     try:
@@ -215,6 +245,8 @@ class QuestionState:
     depth_probe_enabled: bool = True
     non_answer_count: int = 0
     asked_followups: list[str] = field(default_factory=list)
+    focus: str = ""
+    focus_priority: str = ""
 
 
 @dataclass(frozen=True)
