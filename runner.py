@@ -64,6 +64,9 @@ class InterviewRunner:
         self.generation = 0
         self.terminal = False
         self._pending: set[asyncio.Task] = set()
+        # Optional hook (set by the agent job): called with a small dict whenever the question/phase changes, so the
+        # candidate's screen can show the current question, progress and a per-question timer. Never raises.
+        self.on_progress = None
 
     # ------------------------------------------------------------------ state
     def _new_question_state(self, question: dict) -> QuestionState:
@@ -171,6 +174,13 @@ class InterviewRunner:
             return
         self.phase = phase
         snap = self.progress_snapshot()
+        if self.on_progress is not None:
+            question = self.current_question
+            try:
+                self.on_progress({"question_id": question["id"] if question else None, "question_index": self.idx,
+                                  "total": len(self.questions), "followup_count": snap["followup_count"], "phase": phase})
+            except Exception:  # noqa: BLE001 - a UI hook must never affect the interview
+                pass
         self._spawn(self._post("progress", {k: v for k, v in snap.items()}, "record_progress"))
 
     def record_tts_metadata_nowait(self, metadata: dict) -> None:

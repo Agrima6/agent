@@ -261,6 +261,23 @@ async def entrypoint(ctx: JobContext):
                 json.dumps({"sender": sender, "text": text, "timestamp": ts or time.time()}),
                 reliable=True, topic="transcript")
 
+        last_progress: dict = {}
+
+        def publish_progress(payload: dict) -> None:
+            """Tell the candidate's screen which question is active (topic 'progress'). Fire and forget."""
+            last_progress.clear()
+            last_progress.update(payload, timestamp=time.time())
+
+            async def _send() -> None:
+                try:
+                    await ctx.room.local_participant.publish_data(json.dumps(last_progress), reliable=True, topic="progress")
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("progress publish failed: %s", exc)
+
+            asyncio.get_running_loop().create_task(_send())
+
+        runner.on_progress = publish_progress
+
         def candidate_in_room() -> bool:
             return any(p.kind == rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
                        for p in ctx.room.remote_participants.values())
@@ -290,6 +307,8 @@ async def entrypoint(ctx: JobContext):
             async def _replay() -> None:
                 await asyncio.sleep(1.0)               # let the new participant's data channel open
                 count = await interviewer.replay_captions()
+                if last_progress:                       # a reload mid-interview: put the timeline back where it was
+                    await ctx.room.local_participant.publish_data(json.dumps(last_progress), reliable=True, topic="progress")
                 if count:
                     logger.info("replayed %d caption line(s) to %s", count, participant.identity)
 

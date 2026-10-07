@@ -104,3 +104,17 @@ def test_high_priority_questions_get_extra_followups_low_ones_fewer():
     assert r.state.max_followups == 3
     r.advance(); assert r.state.max_followups == 1
     r.advance(); assert r.state.max_followups == 2
+
+
+def test_progress_hook_reports_question_and_never_breaks_the_interview():
+    from runner import InterviewRunner
+    plan = {"questions": [{"id": "a", "question_text": "q1"}, {"id": "b", "question_text": "q2"}]}
+    r = InterviewRunner(None, "i", plan)
+    seen = []
+    r.on_progress = seen.append
+    r._spawn = lambda coro: coro.close()            # no event loop / network in a unit test
+    r.persist_progress_nowait("asking_question")
+    r.advance(); r.persist_progress_nowait("asking_question")
+    assert [(p["question_id"], p["question_index"], p["total"], p["phase"]) for p in seen] == [("a", 0, 2, "asking_question"), ("b", 1, 2, "asking_question")]
+    r.on_progress = lambda p: (_ for _ in ()).throw(RuntimeError("ui hook exploded"))
+    r.persist_progress_nowait("x")                   # must not raise
