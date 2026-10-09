@@ -372,3 +372,15 @@ async def test_the_caption_history_is_bounded_and_a_failing_publish_never_breaks
     assert await agent.replay_captions() == 0                   # fails quietly, no exception
     await session.aclose()
     await client.aclose()
+
+
+def test_elevenlabs_uses_the_voice_for_the_interviewers_gender(monkeypatch):
+    import agent as agent_module
+    monkeypatch.setattr(agent_module, "ELEVENLABS_API_KEY", "k")
+    monkeypatch.setattr(agent_module, "ELEVENLABS_VOICE_ID", "shared_voice")
+    monkeypatch.setattr(agent_module, "ELEVENLABS_VOICE_ID_MALE", "male_voice")
+    monkeypatch.setattr(agent_module, "ELEVENLABS_VOICE_ID_FEMALE", "")
+    male, _ = build_tts(resolve_voice("en", gender="male", provider="elevenlabs"))
+    female, _ = build_tts(resolve_voice("en", gender="female", provider="elevenlabs"))
+    assert male._opts.voice_id == "male_voice"          # the male-specific voice wins
+    assert female._opts.voice_id == "shared_voice"       # no female-specific voice set: falls back to the shared one

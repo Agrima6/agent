@@ -29,7 +29,8 @@ from livekit.plugins import openai as lk_openai
 from livekit.plugins import silero
 
 from conductor import InterviewConductor, Speech
-from config import (AGENT_NAME, API_BASE_URL, ELEVENLABS_API_KEY, ELEVENLABS_MODEL, ELEVENLABS_VOICE_ID, GROQ_API_KEY,
+from config import (AGENT_NAME, API_BASE_URL, ELEVENLABS_API_KEY, ELEVENLABS_MODEL, ELEVENLABS_VOICE_ID, ELEVENLABS_VOICE_ID_FEMALE,
+                    ELEVENLABS_VOICE_ID_MALE, GROQ_API_KEY,
                     OPENAI_API_KEY, SARVAM_API_KEY, TTS_PROVIDER, TTS_VOICE, VOICE_PROVIDER_FALLBACK)
 from edge_tts_plugin import EdgeTTS
 from languages import LANGUAGE_CONFIGS, normalize_language
@@ -190,8 +191,10 @@ def build_tts(voice: VoiceConfig) -> tuple[tts.TTS, SarvamTTS | None]:
         if not ELEVENLABS_API_KEY:
             raise VoiceProviderError("Voice provider 'elevenlabs' is selected but ELEVENLABS_API_KEY is not configured.")
         options = {"api_key": ELEVENLABS_API_KEY, "model": ELEVENLABS_MODEL}
-        if ELEVENLABS_VOICE_ID:
-            options["voice_id"] = ELEVENLABS_VOICE_ID
+        per_gender = ELEVENLABS_VOICE_ID_FEMALE if voice.gender == "female" else ELEVENLABS_VOICE_ID_MALE
+        voice_id = per_gender or ELEVENLABS_VOICE_ID
+        if voice_id:
+            options["voice_id"] = voice_id
         return lk_elevenlabs.TTS(**options), None
     if provider == "openai" and OPENAI_API_KEY:        # legacy value from the old TTS_PROVIDER switch
         return lk_openai.TTS(api_key=OPENAI_API_KEY, voice=TTS_VOICE), None

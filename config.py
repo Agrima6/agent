@@ -30,6 +30,9 @@ SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
 # DEFAULT_VOICE_PROVIDER (else TTS_PROVIDER when it is one of the two, else sarvam) is only the initial value.
 DEFAULT_VOICE_PROVIDER = os.getenv("DEFAULT_VOICE_PROVIDER", "").lower()
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "")        # empty = the plugin's default voice
+# Optional voices per interviewer gender (the interviewer is named Aarav / Aarvi accordingly); each falls back to ELEVENLABS_VOICE_ID.
+ELEVENLABS_VOICE_ID_MALE = os.getenv("ELEVENLABS_VOICE_ID_MALE", "")
+ELEVENLABS_VOICE_ID_FEMALE = os.getenv("ELEVENLABS_VOICE_ID_FEMALE", "")
 ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_flash_v2_5")
 # Opt-in only: when the chosen provider fails, speak with Edge TTS instead of staying silent. OFF by default:
 # a provider failure is reported, never silently handed to a different provider.
