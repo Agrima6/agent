@@ -34,6 +34,7 @@ from typing import Awaitable, Callable
 
 import refusals
 from composer import ComposeRequest, Composed, Composer
+from language_detect import LanguageFollower
 from language_switch import detect_language_request
 from interaction_guard import Classification, Intent, RESTRICTED_INTENTS, classify
 from languages import normalize_language
@@ -84,11 +85,14 @@ class InterviewConductor:
     def __init__(self, runner: InterviewRunner, speak: Callable[[Speech], Awaitable[None]], *,
                  language: str = "en", role: str = "", experience_level: str = "",
                  plain_language: bool = False, composer: Composer | None = None,
-                 judge: Callable = judge_answer, interviewer_name: str = "Aarav", on_language_change=None):
+                 judge: Callable = judge_answer, interviewer_name: str = "Aarav", on_language_change=None,
+                 auto_language: bool = False):
         self.runner = runner
         # Called (sync or async) with the new language code when the candidate asks to switch: the agent job uses it to
         # retune speech recognition and the voice. Failures are logged and never stop the interview.
         self.on_language_change = on_language_change
+        # When on, the interview follows the language the candidate is actually speaking (see language_detect.py).
+        self._follower = LanguageFollower() if auto_language else None
         self._speak = speak
         self.language = normalize_language(language)
         self.role = role
@@ -234,6 +238,12 @@ class InterviewConductor:
         requested_language = detect_language_request(text, current=self.language)
         if requested_language:
             return await self._switch_language(requested_language, text, generation)
+        # The candidate simply started answering in another language: follow them quietly, then handle what they said as
+        # a normal answer (no announcement, nothing re-asked).
+        if self._follower is not None:
+            followed = self._follower.observe(text, self.language)
+            if followed and followed != self.language:
+                await self._apply_language(followed, generation, automatic=True)
         classification = classify(text)
         intent = classification.intent
         q = r.current_question
@@ -375,16 +385,16 @@ class InterviewConductor:
         await self._advance_and_ask(generation, concepts)
 
     # ---------------------------------------------------------------- language
-    async def _switch_language(self, new_language: str, text: str, generation: int) -> None:
-        """Move the rest of the interview into `new_language`: how the interviewer writes, speaks and listens, and what
-        is saved for a reconnect. The current question is asked again in the new language; nothing is counted as an
-        answer, a follow-up or a violation."""
+    async def _apply_language(self, new_language: str, generation: int, *, automatic: bool = False) -> None:
+        """Move the rest of the interview into `new_language`: writing (composer), speaking and listening (via the agent
+        callback), and what is saved for a reconnect. The remaining questions are translated ahead of time in the
+        background so none of them waits."""
         r = self.runner
-        q = r.current_question
         previous = self.language
-        self._record_candidate(text, "language_request")
         self.language = normalize_language(new_language)
-        logger.info("language switch interview=%s %s -> %s", r.interview_id, previous, self.language)
+        if self._follower is not None:
+            self._follower.note_switch()
+        logger.info("language %s interview=%s %s -> %s", "followed" if automatic else "switch", r.interview_id, previous, self.language)
         if self.on_language_change is not None:
             try:
                 result = self.on_language_change(self.language)
@@ -394,6 +404,16 @@ class InterviewConductor:
                 logger.exception("applying the new language to speech failed interview=%s", r.interview_id)
         self._check(generation)
         r.record_language_nowait(self.language)
+        if automatic:
+            await self._localize_upcoming(self.language, wait=False)
+
+    async def _switch_language(self, new_language: str, text: str, generation: int) -> None:
+        """The candidate asked to change language: do it, say so, and ask the current question again in the new language.
+        Nothing is counted as an answer, a follow-up or a violation."""
+        r = self.runner
+        q = r.current_question
+        self._record_candidate(text, "language_request")
+        await self._apply_language(new_language, generation)
         confirmation = refusals.LANGUAGE_SWITCHED[self.language]
         asking_now = not (q is None or not q.get("question_text") or r.small_talk_done < r.small_talk_rounds)
         # Translate the current and all later questions in ONE call while the confirmation is being spoken, so the

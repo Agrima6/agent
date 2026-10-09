@@ -28,6 +28,9 @@ TTS_VOICE = os.getenv("TTS_VOICE", "aditya")
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
 # The two voice providers an admin can choose between (see voice_settings.py). The saved admin setting wins;
 # DEFAULT_VOICE_PROVIDER (else TTS_PROVIDER when it is one of the two, else sarvam) is only the initial value.
+# Follow the candidate's spoken language automatically (speech recognition auto-detects, and the interview switches to Hindi /
+# Hinglish / English when they clearly do). Set AUTO_LANGUAGE=false to go back to one fixed language per interview.
+AUTO_LANGUAGE = os.getenv("AUTO_LANGUAGE", "true").lower() not in ("false", "0", "no", "off")
 DEFAULT_VOICE_PROVIDER = os.getenv("DEFAULT_VOICE_PROVIDER", "").lower()
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "")        # empty = the plugin's default voice
 # Optional voices per interviewer gender (the interviewer is named Aarav / Aarvi accordingly); each falls back to ELEVENLABS_VOICE_ID.

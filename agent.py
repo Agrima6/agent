@@ -30,7 +30,7 @@ from livekit.plugins import silero
 
 from conductor import InterviewConductor, Speech
 from config import (AGENT_NAME, API_BASE_URL, ELEVENLABS_API_KEY, ELEVENLABS_MODEL, ELEVENLABS_VOICE_ID, ELEVENLABS_VOICE_ID_FEMALE,
-                    ELEVENLABS_VOICE_ID_MALE, GROQ_API_KEY,
+                    ELEVENLABS_VOICE_ID_MALE, GROQ_API_KEY, AUTO_LANGUAGE,
                     OPENAI_API_KEY, SARVAM_API_KEY, TTS_PROVIDER, TTS_VOICE, VOICE_PROVIDER_FALLBACK)
 from edge_tts_plugin import EdgeTTS
 from languages import LANGUAGE_CONFIGS, normalize_language
@@ -95,7 +95,7 @@ def make_turn_handling() -> dict:
 class InterviewerAgent(Agent):
     def __init__(self, runner: InterviewRunner, *, language: str, role: str, experience_level: str,
                  plain_language: bool, interviewer_name: str = "Aarav", publish=None, candidate_ready=None,
-                 on_language_change=None):
+                 on_language_change=None, auto_language: bool = False):
         super().__init__(instructions=_AGENT_DESCRIPTION)
         self.runner = runner
         self._publish = publish   # async (sender, text) -> None: live transcript to the candidate's screen
@@ -108,7 +108,8 @@ class InterviewerAgent(Agent):
         self._caption_log: deque = deque(maxlen=200)
         self.conductor = InterviewConductor(
             runner, self._speak, language=language, role=role, experience_level=experience_level,
-            plain_language=plain_language, interviewer_name=interviewer_name, on_language_change=on_language_change)
+            plain_language=plain_language, interviewer_name=interviewer_name, on_language_change=on_language_change,
+            auto_language=auto_language)
 
     async def on_enter(self):
         if self._candidate_ready is not None:
@@ -259,8 +260,13 @@ async def entrypoint(ctx: JobContext):
             sarvam.set_cacheable(all_units)
         # A short vocabulary hint: Whisper spells the words it is told to expect. Without it "Hinglish" came out as
         # "हुजुबुरी" and a request to change language was missed.
+        # With AUTO_LANGUAGE the recogniser is NOT told which language to expect: it detects it for every utterance, so a
+        # candidate who starts speaking Hindi is heard as Hindi (a recogniser locked to English turns Hindi into English-
+        # sounding nonsense). The conductor then follows the language they speak. AUTO_LANGUAGE=false restores one fixed
+        # language per interview.
         stt_engine = lk_groq.STT(model="whisper-large-v3-turbo", api_key=GROQ_API_KEY,
-                                 language=LANGUAGE_CONFIGS[language]["stt_language"], prompt=STT_VOCABULARY_HINT)
+                                 language=LANGUAGE_CONFIGS[language]["stt_language"], prompt=STT_VOCABULARY_HINT,
+                                 detect_language=AUTO_LANGUAGE)
         current_voice = voice
 
         async def apply_language(new_language: str) -> None:
@@ -268,7 +274,8 @@ async def entrypoint(ctx: JobContext):
             SPEAKS (voice), for the rest of this session. Writing and what is saved are handled by the conductor."""
             nonlocal current_voice
             cfg = LANGUAGE_CONFIGS[normalize_language(new_language)]
-            stt_engine.update_options(language=cfg["stt_language"])
+            if not AUTO_LANGUAGE:                         # with auto-detection the recogniser already follows the speaker
+                stt_engine.update_options(language=cfg["stt_language"])
             current_voice = resolve_voice(new_language, voice_prefs.get("gender"), voice_prefs.get("speaker"),
                                           voice_prefs.get("pace"), provider=voice_provider)
             if sarvam is not None:
@@ -348,7 +355,7 @@ async def entrypoint(ctx: JobContext):
                                        plain_language=plain_language,
                                        interviewer_name=INTERVIEWER_NAMES.get(voice.gender, "Aarav"),
                                        publish=publish_transcript, candidate_ready=wait_for_candidate,
-                                       on_language_change=apply_language)
+                                       on_language_change=apply_language, auto_language=AUTO_LANGUAGE)
 
         def on_participant_connected(participant) -> None:
             if participant.kind != rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD:

@@ -64,7 +64,7 @@ def lead_in(text=""):
 
 class Harness:
     def __init__(self, questions=(Q1, Q2, Q3), *, evaluations=(), composer_responses=(), language="en",
-                 small_talk_rounds=0, max_followups=2, depth_probe=True, duration_minutes=30):
+                 small_talk_rounds=0, max_followups=2, depth_probe=True, duration_minutes=30, auto_language=False):
         self.posts: list[tuple[str, dict]] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -90,7 +90,7 @@ class Harness:
             self.spoken.append(speech)
 
         self.conductor = InterviewConductor(self.runner, speak, language=language, role="Backend Engineer",
-                                            composer=Composer(self.provider), judge=judge)
+                                            composer=Composer(self.provider), judge=judge, auto_language=auto_language)
 
     async def say(self, text: str) -> Speech:
         await self.conductor.handle_candidate_turn(text)
@@ -615,3 +615,39 @@ async def test_a_hindi_interview_prepares_its_questions_in_the_background(harnes
     for task in list(h.conductor._localizing):
         await task
     assert h.conductor._localized[("q1", "hi")] == HI_Q1 and h.conductor._localized[("q2", "hi")] == HI_Q2
+
+
+# ================================================================== following the language the candidate speaks
+HI_ANSWER = "मैंने पिछले दो साल एक वेब एप्लिकेशन पर काम किया है जिसमें hashing इस्तेमाल हुआ"
+
+
+async def test_answering_in_hindi_moves_the_interview_to_hindi_without_announcing_it(harness_factory):
+    h = harness_factory(auto_language=True, evaluations=[strong()], depth_probe=False,
+                        composer_responses=[{"questions": [{"id": "q2", "text": HI_Q2}]}])
+    applied = []
+    h.conductor.on_language_change = lambda lang: applied.append(lang)
+
+    await h.say(HI_ANSWER)
+
+    assert h.conductor.language in ("hi", "hinglish") and applied == [h.conductor.language]
+    assert h.judge_calls == [HI_ANSWER]                                    # what they said was handled as their ANSWER
+    assert all(s.action != "LANGUAGE_SWITCH" for s in h.spoken)             # no announcement, nothing re-asked
+    assert h.posted("language")[-1]["language"] == h.conductor.language    # saved for a reconnect
+
+
+async def test_short_replies_in_another_language_do_not_move_the_interview(harness_factory):
+    h = harness_factory(auto_language=True, evaluations=[medium()], composer_responses=[followup("Can you say more?")])
+    await h.say("हाँ ठीक है")
+    assert h.conductor.language == "en"
+
+
+async def test_an_english_answer_in_an_english_interview_changes_nothing(harness_factory):
+    h = harness_factory(auto_language=True, evaluations=[medium()], composer_responses=[followup("Can you say more?")])
+    await h.say("It hashes the key to find a bucket and handles collisions with chaining")
+    assert h.conductor.language == "en" and h.posted("language") == []
+
+
+async def test_following_the_speaker_can_be_switched_off(harness_factory):
+    h = harness_factory(auto_language=False, evaluations=[medium()], composer_responses=[followup("Tell me more.")])
+    await h.say(HI_ANSWER)
+    assert h.conductor.language == "en"
