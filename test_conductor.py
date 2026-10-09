@@ -524,3 +524,55 @@ async def test_process_questions_never_leak_interview_content(harness_factory):
     await h.say("I'm good, thanks.")
     out = await h.say("What will you ask me in the interview?")
     assert Q1["question_text"] not in out.text and Q2["question_text"] not in out.text
+
+
+# ================================================================== changing language mid-interview
+async def test_asking_for_hindi_switches_everything_and_repeats_the_question(harness_factory):
+    h = harness_factory(composer_responses=[lead_in("")], evaluations=[strong()])
+    applied = []
+    h.conductor.on_language_change = lambda lang: applied.append(lang)
+    before = (h.runner.idx, h.runner.state.followup_count)
+
+    spoken = await h.say("Can you speak in Hindi to me please?")
+
+    assert h.conductor.language == "hi"
+    assert applied == ["hi"]                                              # speech recognition + voice were retuned
+    assert spoken.action == "LANGUAGE_SWITCH"
+    assert spoken.text.startswith(refusals.LANGUAGE_SWITCHED["hi"])        # confirms in the new language...
+    assert spoken.question_id == "q1" and spoken.question_text == Q1["question_text"]   # ...then asks the same question again
+    assert h.posted("language") == [{"language": "hi"}]                   # saved, so a reconnect resumes in Hindi
+    assert (h.runner.idx, h.runner.state.followup_count) == before        # no question skipped, no follow-up used
+    assert h.judge_calls == []                                            # the request was never scored as an answer
+
+
+async def test_the_new_language_is_used_for_everything_after_the_switch(harness_factory):
+    h = harness_factory(composer_responses=[lead_in(""), followup("आपने hashing का ज़िक्र किया।")], evaluations=[medium()])
+    await h.say("Hindi mein baat karo")
+    assert h.conductor.language == "hi"
+    spoken = await h.say("It uses hashing to find a bucket.")             # a normal answer afterwards
+    assert h.conductor.language == "hi" and spoken.action != "LANGUAGE_SWITCH"
+    assert h.judge_calls == ["It uses hashing to find a bucket."]         # the request itself was never scored
+
+
+async def test_during_small_talk_the_switch_only_confirms(harness_factory):
+    h = harness_factory(small_talk_rounds=2)
+    spoken = await h.say("Please speak in Hinglish")
+    assert h.conductor.language == "hinglish"
+    assert spoken.text == refusals.LANGUAGE_SWITCHED["hinglish"]          # no question is asked yet
+
+
+async def test_a_failure_while_retuning_speech_does_not_end_the_interview(harness_factory):
+    h = harness_factory(composer_responses=[lead_in("")])
+
+    def explode(lang):
+        raise RuntimeError("tts reconnect failed")
+
+    h.conductor.on_language_change = explode
+    spoken = await h.say("Hindi mein baat karo")
+    assert spoken.action == "LANGUAGE_SWITCH" and h.conductor.language == "hi" and not h.runner.terminal
+
+
+async def test_mentioning_a_language_inside_an_answer_is_not_a_switch(harness_factory):
+    h = harness_factory(evaluations=[strong()], composer_responses=[followup("Interesting, tell me more.")])
+    await h.say("I built a Hindi chatbot for support using transformers")
+    assert h.conductor.language == "en" and h.judge_calls                  # treated as an answer

@@ -34,6 +34,7 @@ from typing import Awaitable, Callable
 
 import refusals
 from composer import ComposeRequest, Composer
+from language_switch import detect_language_request
 from interaction_guard import Classification, Intent, RESTRICTED_INTENTS, classify
 from languages import normalize_language
 from policy import Action, Evaluation, decide_action, judge_answer, restricted_intent_from_judge
@@ -81,8 +82,11 @@ class InterviewConductor:
     def __init__(self, runner: InterviewRunner, speak: Callable[[Speech], Awaitable[None]], *,
                  language: str = "en", role: str = "", experience_level: str = "",
                  plain_language: bool = False, composer: Composer | None = None,
-                 judge: Callable = judge_answer, interviewer_name: str = "Aarav"):
+                 judge: Callable = judge_answer, interviewer_name: str = "Aarav", on_language_change=None):
         self.runner = runner
+        # Called (sync or async) with the new language code when the candidate asks to switch: the agent job uses it to
+        # retune speech recognition and the voice. Failures are logged and never stop the interview.
+        self.on_language_change = on_language_change
         self._speak = speak
         self.language = normalize_language(language)
         self.role = role
@@ -184,6 +188,10 @@ class InterviewConductor:
     # ---------------------------------------------------------------- turn routing
     async def _handle(self, text: str, generation: int) -> None:
         r = self.runner
+        # "Can you speak in Hindi?" changes the interview language for the rest of the session.
+        requested_language = detect_language_request(text, current=self.language)
+        if requested_language:
+            return await self._switch_language(requested_language, text, generation)
         classification = classify(text)
         intent = classification.intent
         q = r.current_question
@@ -323,6 +331,36 @@ class InterviewConductor:
             return
 
         await self._advance_and_ask(generation, concepts)
+
+    # ---------------------------------------------------------------- language
+    async def _switch_language(self, new_language: str, text: str, generation: int) -> None:
+        """Move the rest of the interview into `new_language`: how the interviewer writes, speaks and listens, and what
+        is saved for a reconnect. The current question is asked again in the new language; nothing is counted as an
+        answer, a follow-up or a violation."""
+        r = self.runner
+        q = r.current_question
+        previous = self.language
+        self._record_candidate(text, "language_request")
+        self.language = normalize_language(new_language)
+        logger.info("language switch interview=%s %s -> %s", r.interview_id, previous, self.language)
+        if self.on_language_change is not None:
+            try:
+                result = self.on_language_change(self.language)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:  # noqa: BLE001 - audio retuning must never end the interview
+                logger.exception("applying the new language to speech failed interview=%s", r.interview_id)
+        self._check(generation)
+        r.record_language_nowait(self.language)
+        confirmation = refusals.LANGUAGE_SWITCHED[self.language]
+        if q is None or not q.get("question_text") or r.small_talk_done < r.small_talk_rounds:
+            return await self._say(Speech(confirmation, "LANGUAGE_SWITCH", q["id"] if q else "", ""))
+        composed = await self._compose(ComposeRequest(
+            action=Action.NEXT_QUESTION, question=q, next_question=q, language=self.language, role=self.role,
+            experience_level=self.experience_level, plain_language=self.plain_language))
+        self._check(generation)
+        r.last_question_text = composed.question_only or composed.text
+        await self._say(Speech(f"{confirmation} {composed.text}".strip(), "LANGUAGE_SWITCH", q["id"], q["question_text"]))
 
     # ---------------------------------------------------------------- moving on
     async def _advance_and_ask(self, generation: int, mentioned: list[str], prefix: str = "") -> None:

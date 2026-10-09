@@ -94,7 +94,8 @@ def make_turn_handling() -> dict:
 
 class InterviewerAgent(Agent):
     def __init__(self, runner: InterviewRunner, *, language: str, role: str, experience_level: str,
-                 plain_language: bool, interviewer_name: str = "Aarav", publish=None, candidate_ready=None):
+                 plain_language: bool, interviewer_name: str = "Aarav", publish=None, candidate_ready=None,
+                 on_language_change=None):
         super().__init__(instructions=_AGENT_DESCRIPTION)
         self.runner = runner
         self._publish = publish   # async (sender, text) -> None: live transcript to the candidate's screen
@@ -107,7 +108,7 @@ class InterviewerAgent(Agent):
         self._caption_log: deque = deque(maxlen=200)
         self.conductor = InterviewConductor(
             runner, self._speak, language=language, role=role, experience_level=experience_level,
-            plain_language=plain_language, interviewer_name=interviewer_name)
+            plain_language=plain_language, interviewer_name=interviewer_name, on_language_change=on_language_change)
 
     async def on_enter(self):
         if self._candidate_ready is not None:
@@ -252,10 +253,28 @@ async def entrypoint(ctx: JobContext):
             essential = [u for text in refusals.fixed_phrases(language, essential_only=True)
                          for u in speech_units(prepare_for_speech(text))]
             sarvam.set_cacheable(all_units)
+        stt_engine = lk_groq.STT(model="whisper-large-v3-turbo", api_key=GROQ_API_KEY,
+                                 language=LANGUAGE_CONFIGS[language]["stt_language"])
+        current_voice = voice
+
+        async def apply_language(new_language: str) -> None:
+            """The candidate asked to change language: retune how the interviewer LISTENS (speech recognition) and how it
+            SPEAKS (voice), for the rest of this session. Writing and what is saved are handled by the conductor."""
+            nonlocal current_voice
+            cfg = LANGUAGE_CONFIGS[normalize_language(new_language)]
+            stt_engine.update_options(language=cfg["stt_language"])
+            current_voice = resolve_voice(new_language, voice_prefs.get("gender"), voice_prefs.get("speaker"),
+                                          voice_prefs.get("pace"), provider=voice_provider)
+            if sarvam is not None:
+                await sarvam.switch_voice(current_voice)
+                units = [u for t in refusals.fixed_phrases(new_language) for u in speech_units(prepare_for_speech(t))]
+                sarvam.set_cacheable(units)
+            logger.info("interview %s: speech now %s (listening %s, voice %s)", interview_id, cfg["label"],
+                        cfg["stt_language"], current_voice.language_code)
+
         session = AgentSession(
             vad=ctx.proc.userdata["vad"],
-            stt=lk_groq.STT(model="whisper-large-v3-turbo", api_key=GROQ_API_KEY,
-                            language=LANGUAGE_CONFIGS[language]["stt_language"]),
+            stt=stt_engine,
             tts=tts_engine,
             turn_handling=make_turn_handling(),
         )
@@ -322,7 +341,8 @@ async def entrypoint(ctx: JobContext):
                                        experience_level=data.get("experience_level") or "",
                                        plain_language=plain_language,
                                        interviewer_name=INTERVIEWER_NAMES.get(voice.gender, "Aarav"),
-                                       publish=publish_transcript, candidate_ready=wait_for_candidate)
+                                       publish=publish_transcript, candidate_ready=wait_for_candidate,
+                                       on_language_change=apply_language)
 
         def on_participant_connected(participant) -> None:
             if participant.kind != rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD:

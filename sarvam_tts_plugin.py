@@ -24,6 +24,7 @@ Delivery guarantees:
 import asyncio
 import base64
 import contextlib
+import dataclasses
 import io
 import logging
 import time
@@ -288,6 +289,21 @@ class _SentenceEngine:
     async def warm(self) -> None:
         await self._pool.warm()
 
+    async def switch_voice(self, voice: VoiceConfig) -> None:
+        """Change language/speaker mid-interview. Pooled connections were opened for the old language, so they are
+        replaced, and phrases cached in the old language are dropped. The audio sample rate must not change: the
+        stream the candidate is listening to already has one."""
+        if voice.sample_rate != self.voice.sample_rate:
+            voice = dataclasses.replace(voice, sample_rate=self.voice.sample_rate)
+        old_pool = self._pool
+        self.voice = voice
+        self._cache = _PhraseCache()
+        self._cacheable = set()
+        self._pool = _ConnectionPool(self._open_ws)
+        with contextlib.suppress(Exception):
+            await old_pool.aclose()
+        await self._pool.warm()
+
     async def aclose(self) -> None:
         await self._pool.aclose()
         if self._http is not None:
@@ -550,6 +566,10 @@ class SarvamTTS(tts.TTS):
 
     def set_cacheable(self, units) -> None:
         self._engine.set_cacheable(units)
+
+    async def switch_voice(self, voice: VoiceConfig) -> None:
+        await self._engine.switch_voice(voice)
+        self.voice = self._engine.voice
 
     async def prewarm_phrases(self, units) -> int:
         return await self._engine.prewarm_phrases(units)

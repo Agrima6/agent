@@ -211,6 +211,12 @@ WELCOME_BACK = {
     "hi": "वापस स्वागत है। आइए वहीं से आगे बढ़ते हैं जहाँ हम रुके थे।",
     "hinglish": "Welcome back। आइए वहीं से आगे बढ़ते हैं जहाँ हम रुके थे।",
 }
+# Spoken when the candidate asks to change language: the interviewer switches, then asks the current question again.
+LANGUAGE_SWITCHED = {
+    "en": "Sure, let's continue in English.",
+    "hi": "ज़रूर, अब हम हिंदी में बात करेंगे।",
+    "hinglish": "Sure, अब हम Hinglish में बात करेंगे।",
+}
 # Spoken when the same question has drawn several non-answers in a row; the engine then moves on.
 MOVE_ON = {
     "en": "Let's try another question.",

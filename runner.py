@@ -169,6 +169,12 @@ class InterviewRunner:
             "evaluation": json.dumps(evaluation), "action": action, "followup_count": followup_count,
         }, "record_coverage_result"))
 
+    def record_language_nowait(self, language: str) -> None:
+        """Remember the language the interview is now in, so a reconnect or restart resumes in it."""
+        if self.terminal:
+            return
+        self._spawn(self._post("language", {"language": language}, "set_language"))
+
     def persist_progress_nowait(self, phase: str) -> None:
         if self.terminal:
             return
