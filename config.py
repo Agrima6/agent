@@ -26,6 +26,14 @@ AGENT_NAME = os.getenv("AGENT_NAME", "workmate-interviewer")
 TTS_PROVIDER = os.getenv("TTS_PROVIDER", "edge").lower()
 TTS_VOICE = os.getenv("TTS_VOICE", "aditya")
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
+# The two voice providers an admin can choose between (see voice_settings.py). The saved admin setting wins;
+# DEFAULT_VOICE_PROVIDER (else TTS_PROVIDER when it is one of the two, else sarvam) is only the initial value.
+DEFAULT_VOICE_PROVIDER = os.getenv("DEFAULT_VOICE_PROVIDER", "").lower()
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "")        # empty = the plugin's default voice
+ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_flash_v2_5")
+# Opt-in only: when the chosen provider fails, speak with Edge TTS instead of staying silent. OFF by default:
+# a provider failure is reported, never silently handed to a different provider.
+VOICE_PROVIDER_FALLBACK = os.getenv("VOICE_PROVIDER_FALLBACK", "").lower()
 # Voice settings (speaker, pace, language code, sample rate) live in voice_config.py, calibrated per
 # speaker; override with TTS_SPEAKER_OVERRIDE / TTS_PACE_OVERRIDE / TTS_GENDER / TTS_SAMPLE_RATE.
 

@@ -246,14 +246,25 @@ def test_turn_handling_gives_candidates_longer_thinking_pauses_without_slowing_n
     assert TURN_HANDLING["preemptive_generation"]["enabled"] is False
 
 
-def test_only_a_configured_provider_is_used_and_sarvam_gets_a_fallback(monkeypatch):
+def test_only_the_selected_provider_is_used_and_nothing_silently_replaces_it(monkeypatch):
     import agent as agent_module
+    from agent import VoiceProviderError
     monkeypatch.setattr(agent_module, "SARVAM_API_KEY", "k")
+    monkeypatch.setattr(agent_module, "VOICE_PROVIDER_FALLBACK", "")
     engine, sarvam = build_tts(resolve_voice("en", provider="sarvam"))
-    assert sarvam is not None and engine.__class__.__name__ == "FallbackAdapter"
+    assert sarvam is not None and engine is sarvam                       # no hidden second provider
+    monkeypatch.setattr(agent_module, "VOICE_PROVIDER_FALLBACK", "edge")  # explicit opt-in only
+    engine, sarvam = build_tts(resolve_voice("en", provider="sarvam"))
+    assert engine.__class__.__name__ == "FallbackAdapter"
     monkeypatch.setattr(agent_module, "SARVAM_API_KEY", "")
-    engine2, sarvam2 = build_tts(resolve_voice("en", provider="sarvam"))
-    assert sarvam2 is None and engine2.__class__.__name__ == "EdgeTTS"
+    with pytest.raises(VoiceProviderError):                              # missing credentials: a clear error, not Edge
+        build_tts(resolve_voice("en", provider="sarvam"))
+    monkeypatch.setattr(agent_module, "ELEVENLABS_API_KEY", "")
+    with pytest.raises(VoiceProviderError):
+        build_tts(resolve_voice("en", provider="elevenlabs"))
+    monkeypatch.setattr(agent_module, "ELEVENLABS_API_KEY", "k")
+    engine, sarvam = build_tts(resolve_voice("en", provider="elevenlabs"))
+    assert sarvam is None and "elevenlabs" in engine.__class__.__module__    # real ElevenLabs engine, built with voice_id
 
 
 class _Participant:

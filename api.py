@@ -7,6 +7,7 @@ import sys
 import uuid
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Header, BackgroundTasks
+from pydantic import BaseModel
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
@@ -26,6 +27,7 @@ from db import (
     REPORT_PENDING, REPORT_PROCESSING, REPORT_READY, REPORT_FAILED,
 )
 from resume_parser import extract_text_from_pdf, parse_resume
+import voice_settings
 from focus import build_focus_areas
 from intelligence_report import build_intelligence
 from planner import build_interview_plan, generate_dynamic_questions, warm_question_bank_embeddings
@@ -188,6 +190,28 @@ def _validated_voice(gender: str, speaker: str, pace: float | None) -> dict:
             "voice_pace": clamp_pace(pace) if pace is not None else None}
 
 
+class VoiceProviderUpdate(BaseModel):
+    provider: str
+    expectedVersion: int | None = None
+
+
+@app.get("/v1/settings/voice-provider", dependencies=[Depends(require_service_key)])
+def get_voice_provider(db: Session = Depends(get_db)):
+    return voice_settings.describe(db)
+
+
+@app.put("/v1/settings/voice-provider", dependencies=[Depends(require_service_key)])
+def put_voice_provider(body: VoiceProviderUpdate, x_actor: str = Header(""), db: Session = Depends(get_db)):
+    """Called by the platform backend after it has authenticated an admin and checked their permission.
+    `X-Actor` names that admin for the audit trail; browsers never reach this endpoint directly."""
+    try:
+        result = voice_settings.set_provider(db, body.provider, x_actor, body.expectedVersion)
+    except voice_settings.VoiceSettingsError as exc:
+        raise HTTPException(exc.status, exc.message)
+    logger.info("voice provider changed to %s by %s", result["provider"], x_actor[:120])
+    return {**result, "message": "Voice provider updated successfully"}
+
+
 @app.post("/v1/interviews", dependencies=[Depends(require_service_key)])
 def create_interview(candidate_id: str = Form(...), role_id: str = Form(...),
                       duration_minutes: int = Form(30),
@@ -212,6 +236,10 @@ def create_interview(candidate_id: str = Form(...), role_id: str = Form(...),
     if coverage_threshold is not None and not 0.3 <= coverage_threshold <= 0.95:
         raise HTTPException(422, "coverage_threshold must be between 0.3 and 0.95")
     voice_fields = _validated_voice(voice_gender, voice_speaker, voice_pace)
+    try:
+        voice_provider = voice_settings.resolve_for_new_interview(db)    # fixed for this interview from now on
+    except voice_settings.VoiceSettingsError as exc:
+        raise HTTPException(exc.status, exc.message)
 
     # Generate this role's scenario questions once and cache them, so every candidate who
     # interviews for the same role faces the same questions — standardized questions are a
@@ -244,6 +272,7 @@ def create_interview(candidate_id: str = Form(...), role_id: str = Form(...),
         role_id=role_id,
         duration_minutes=duration_minutes,
         plan=plan,
+        voice_provider=voice_provider,
         status=states.CREATED,
         experience_level=(experience_level.strip()[:80] or None),
         depth_probe_enabled=int(depth_probe_enabled),
@@ -277,6 +306,7 @@ def get_interview(interview_id: str, db: Session = Depends(get_db)):
         "experience_level": interview.experience_level,
         "depth_probe_enabled": bool(interview.depth_probe_enabled if interview.depth_probe_enabled is not None else 1),
         "voice": {"gender": interview.voice_gender, "speaker": interview.voice_speaker, "pace": interview.voice_pace},
+        "voice_provider": interview.voice_provider,
         "progress": interview.progress,
     }
 

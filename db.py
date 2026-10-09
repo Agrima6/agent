@@ -68,6 +68,9 @@ class Interview(Base):
     voice_speaker = Column(String, nullable=True)
     voice_pace = Column(Float, nullable=True)
     voice_used = Column(JSON, nullable=True)           # the voice + TTS delivery stats actually used
+    # The voice provider chosen when the interview was CREATED. The session keeps it even if an admin changes the
+    # global setting mid-interview; the next interview picks up the new setting.
+    voice_provider = Column(String, nullable=True)
     # Server-side interview progress, written by the agent after every transition so a restarted
     # agent worker resumes where the interview was instead of starting over:
     # {"question_index": int, "followup_count": int, "small_talk_done": int, "phase": str}
@@ -151,6 +154,29 @@ class Report(Base):
     error = Column(Text, nullable=True)
 
 
+class AppSetting(Base):
+    """One row per application setting (key/value). Holds only non-secret values such as the chosen voice provider."""
+    __tablename__ = "app_settings"
+    key = Column(String, primary_key=True)
+    value = Column(String, nullable=False)
+    version = Column(Integer, default=1, nullable=False)     # optimistic locking for concurrent admin edits
+    updated_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class SettingAudit(Base):
+    """Who changed which setting, when, from what to what. Never stores secrets."""
+    __tablename__ = "setting_audit"
+    id = Column(String, primary_key=True, default=lambda: gen_id("aud"))
+    key = Column(String, nullable=False, index=True)
+    old_value = Column(String, nullable=True)
+    new_value = Column(String, nullable=False)
+    actor = Column(String, nullable=False)
+    scope = Column(String, default="global")
+    at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
 # Columns added after a table first shipped. create_all() only creates MISSING TABLES, never missing
 # columns on an existing one, so every column added later must be listed here to reach databases
 # (SQLite dev files and existing Postgres deployments alike) that already have the table.
@@ -161,7 +187,7 @@ _COLUMN_PATCHES: dict[str, dict[str, str]] = {
         "max_integrity_flags": "INTEGER DEFAULT 3", "integrity_flag_count": "INTEGER DEFAULT 0",
         "depth_probe_enabled": "INTEGER DEFAULT 1", "experience_level": "VARCHAR",
         "voice_gender": "VARCHAR", "voice_speaker": "VARCHAR", "voice_pace": "FLOAT",
-        "voice_used": "JSON", "progress": "JSON",
+        "voice_used": "JSON", "progress": "JSON", "voice_provider": "VARCHAR",
     },
     "reports": {"status": f"VARCHAR DEFAULT '{REPORT_READY}'", "error": "TEXT"},
     "interview_turns": {"intent": "VARCHAR", "action": "VARCHAR"},

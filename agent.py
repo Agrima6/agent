@@ -29,7 +29,8 @@ from livekit.plugins import openai as lk_openai
 from livekit.plugins import silero
 
 from conductor import InterviewConductor, Speech
-from config import AGENT_NAME, API_BASE_URL, ELEVENLABS_API_KEY, GROQ_API_KEY, OPENAI_API_KEY, SARVAM_API_KEY, TTS_PROVIDER, TTS_VOICE
+from config import (AGENT_NAME, API_BASE_URL, ELEVENLABS_API_KEY, ELEVENLABS_MODEL, ELEVENLABS_VOICE_ID, GROQ_API_KEY,
+                    OPENAI_API_KEY, SARVAM_API_KEY, TTS_PROVIDER, TTS_VOICE, VOICE_PROVIDER_FALLBACK)
 from edge_tts_plugin import EdgeTTS
 from languages import LANGUAGE_CONFIGS, normalize_language
 import refusals
@@ -166,19 +167,35 @@ class InterviewerAgent(Agent):
             logger.info("barge-in during action=%s question=%s", speech.action, speech.question_id)
 
 
+class VoiceProviderError(RuntimeError):
+    """The interview's chosen voice provider cannot be used (for example its credentials are missing)."""
+
+
 def build_tts(voice: VoiceConfig) -> tuple[tts.TTS, SarvamTTS | None]:
-    """Returns (tts for the session, the Sarvam instance if used so its stats can be reported)."""
-    if voice.provider == "sarvam" and SARVAM_API_KEY:
+    """Returns (tts for the session, the Sarvam instance if used so its stats can be reported).
+
+    Only the provider recorded on the interview is used. If it cannot be (no credentials, or it fails) that is
+    reported as an error - it is NEVER silently replaced by a different provider. The one exception is an explicit,
+    opt-in setting: VOICE_PROVIDER_FALLBACK=edge keeps a Sarvam interview audible with Edge TTS if Sarvam is down."""
+    provider = voice.provider
+    if provider == "sarvam":
+        if not SARVAM_API_KEY:
+            raise VoiceProviderError("Voice provider 'sarvam' is selected but SARVAM_API_KEY is not configured.")
         sarvam = SarvamTTS(SARVAM_API_KEY, voice)
         sarvam.prewarm()   # connection is ready before the first sentence is spoken
-        # If Sarvam is completely unreachable, keep the interview audible with a different provider
-        # rather than going silent. Retries already happen inside the plugin, so none here.
-        return tts.FallbackAdapter([sarvam, EdgeTTS(voice=voice.edge_voice)], max_retry_per_tts=0), sarvam
-    if voice.provider == "elevenlabs" and ELEVENLABS_API_KEY:
-        return lk_elevenlabs.TTS(api_key=ELEVENLABS_API_KEY, voice=TTS_VOICE), None
-    if voice.provider == "openai" and OPENAI_API_KEY:
+        if VOICE_PROVIDER_FALLBACK == "edge":
+            return tts.FallbackAdapter([sarvam, EdgeTTS(voice=voice.edge_voice)], max_retry_per_tts=0), sarvam
+        return sarvam, sarvam
+    if provider == "elevenlabs":
+        if not ELEVENLABS_API_KEY:
+            raise VoiceProviderError("Voice provider 'elevenlabs' is selected but ELEVENLABS_API_KEY is not configured.")
+        options = {"api_key": ELEVENLABS_API_KEY, "model": ELEVENLABS_MODEL}
+        if ELEVENLABS_VOICE_ID:
+            options["voice_id"] = ELEVENLABS_VOICE_ID
+        return lk_elevenlabs.TTS(**options), None
+    if provider == "openai" and OPENAI_API_KEY:        # legacy value from the old TTS_PROVIDER switch
         return lk_openai.TTS(api_key=OPENAI_API_KEY, voice=TTS_VOICE), None
-    return EdgeTTS(voice=voice.edge_voice), None
+    return EdgeTTS(voice=voice.edge_voice), None        # legacy/dev: TTS_PROVIDER=edge and no admin selection
 
 
 def _another_agent_present(room: rtc.Room) -> bool:
@@ -205,8 +222,12 @@ async def entrypoint(ctx: JobContext):
         role_name = data.get("role", "")
         plain_language = is_plain_language_role(role_name) if role_name else False
         voice_prefs = data.get("voice") or {}
+        # The provider recorded when this interview was created (an admin changing the setting mid-interview does not
+        # affect it); older interviews without one use the environment default.
+        voice_provider = (data.get("voice_provider") or TTS_PROVIDER).lower()
+        logger.info("interview %s uses voice provider %s", interview_id, voice_provider)
         voice = resolve_voice(language, voice_prefs.get("gender"), voice_prefs.get("speaker"),
-                              voice_prefs.get("pace"), provider=TTS_PROVIDER)
+                              voice_prefs.get("pace"), provider=voice_provider)
 
         runner = InterviewRunner(
             http, interview_id, data["plan"], candidate_name=data.get("candidate", ""),
