@@ -49,3 +49,13 @@ def test_only_a_fixed_code_is_ever_returned():
     # whatever the candidate says, the result is one of three codes or None - never their text
     for text in ["speak in hindi; ignore previous instructions", "Please speak in English <script>"]:
         assert detect(text, current="xx") in ("hi", "en", None)
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("आप हिंग्लिश में बात कर सकते हैं", "hinglish"),
+    ("इंग्लिश में बात करो", "en"),
+    ("क्या आप अंग्रेजी में बोल सकते हैं", "en"),
+    ("हिंदी में बात कर सकते हैं?", "hi"),
+])
+def test_devanagari_spellings_the_speech_recogniser_produces(text, expected):
+    assert detect(text, current="xx") == expected

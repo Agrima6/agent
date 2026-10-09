@@ -33,12 +33,12 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 import refusals
-from composer import ComposeRequest, Composer
+from composer import ComposeRequest, Composed, Composer
 from language_switch import detect_language_request
 from interaction_guard import Classification, Intent, RESTRICTED_INTENTS, classify
 from languages import normalize_language
 from policy import Action, Evaluation, decide_action, judge_answer, restricted_intent_from_judge
-from runner import InterviewRunner
+from runner import InterviewRunner, question_topic
 
 import turn_trace
 
@@ -61,6 +61,8 @@ INTRO_TYPES = ("introduction", "candidate_introduction")
 # the interview degrades gracefully (no follow-up / plain deterministic wording) instead of stalling.
 JUDGE_DEADLINE = 3.5
 COMPOSE_DEADLINE = 2.5
+LOCALIZE_DEADLINE = 8.0        # turning a question into Hindi/Hinglish takes longer than an English lead-in, and falling back to English is worse than waiting
+LOCALIZE_BATCH_DEADLINE = 15.0
 MAX_CONSECUTIVE_NON_ANSWERS = 3   # after this many non-answers to one question, move on
 
 
@@ -97,11 +99,15 @@ class InterviewConductor:
         self.judge = judge
         self.picker = refusals.RefusalPicker()
         self._lock = asyncio.Lock()      # one candidate turn is processed at a time
+        self._localized: dict[tuple[str, str], str] = {}     # (question id, language) -> the question already rendered in that language
+        self._localizing: set[asyncio.Task] = set()
         self._last_spoken = ""
 
     # ---------------------------------------------------------------- lifecycle
     async def start(self) -> None:
         r = self.runner
+        if self.language != "en":
+            await self._localize_upcoming(self.language, wait=False)    # background: questions are ready before they are asked
         async with self._lock:
             if r.resumed and r.current_question is not None:
                 q = r.current_question
@@ -150,14 +156,50 @@ class InterviewConductor:
 
     async def _compose(self, req: ComposeRequest):
         turn_trace.mark("compose_start")
+        nq = req.next_question or {}
+        language = normalize_language(req.language)
+        if req.action == Action.NEXT_QUESTION and language != "en":
+            cached = self._localized.get((str(nq.get("id")), language))
+            if cached:                                   # translated ahead of time: nothing to wait for
+                turn_trace.mark("compose_end")
+                return Composed(text=cached, action=Action.NEXT_QUESTION, source="cache", question_only=cached,
+                                topic=question_topic(nq))
+        deadline = LOCALIZE_DEADLINE if (req.action == Action.NEXT_QUESTION and language != "en") else COMPOSE_DEADLINE
         try:
-            return await asyncio.wait_for(asyncio.to_thread(self.composer.compose, req), COMPOSE_DEADLINE)
+            return await asyncio.wait_for(asyncio.to_thread(self.composer.compose, req), deadline)
         except asyncio.TimeoutError:
             logger.warning("composer missed its %.0fs deadline interview=%s - using deterministic wording",
-                           COMPOSE_DEADLINE, self.runner.interview_id)
+                           deadline, self.runner.interview_id)
             return self.composer.fallback(req, "deadline_exceeded")
         finally:
             turn_trace.mark("compose_end")
+
+    async def _localize_upcoming(self, language: str, *, wait: bool) -> None:
+        """Render the current and remaining questions into `language` in one call and remember them. With wait=False it
+        runs in the background (so the interview is never held up by it)."""
+        language = normalize_language(language)
+        r = self.runner
+        todo = [q for q in r.questions[r.idx:] if q.get("question_text") and (str(q.get("id")), language) not in self._localized]
+        if language == "en" or not todo:
+            return
+
+        async def work() -> None:
+            try:
+                done = await asyncio.wait_for(
+                    asyncio.to_thread(self.composer.localize_questions, todo, language, self.role), LOCALIZE_BATCH_DEADLINE)
+            except (asyncio.TimeoutError, Exception):  # noqa: BLE001 - best effort; questions fall back to on-demand localisation
+                logger.warning("pre-translating questions failed interview=%s language=%s", r.interview_id, language)
+                return
+            for qid, text in done.items():
+                self._localized[(qid, language)] = text
+            logger.info("pre-translated %d/%d question(s) into %s interview=%s", len(done), len(todo), language, r.interview_id)
+
+        if wait:
+            await work()
+        else:
+            task = asyncio.get_running_loop().create_task(work())
+            self._localizing.add(task)
+            task.add_done_callback(self._localizing.discard)
 
     def _check(self, generation: int) -> None:
         if self.runner.is_stale(generation):
@@ -353,14 +395,24 @@ class InterviewConductor:
         self._check(generation)
         r.record_language_nowait(self.language)
         confirmation = refusals.LANGUAGE_SWITCHED[self.language]
-        if q is None or not q.get("question_text") or r.small_talk_done < r.small_talk_rounds:
-            return await self._say(Speech(confirmation, "LANGUAGE_SWITCH", q["id"] if q else "", ""))
+        asking_now = not (q is None or not q.get("question_text") or r.small_talk_done < r.small_talk_rounds)
+        # Translate the current and all later questions in ONE call while the confirmation is being spoken, so the
+        # candidate hears an answer straight away instead of a silence.
+        translating = asyncio.get_running_loop().create_task(self._localize_upcoming(self.language, wait=True))
+        try:
+            await self._say(Speech(confirmation, "LANGUAGE_SWITCH", q["id"] if q else "", ""))
+            self._check(generation)
+        finally:
+            await translating
+        if not asking_now:
+            return
+        self._check(generation)
         composed = await self._compose(ComposeRequest(
             action=Action.NEXT_QUESTION, question=q, next_question=q, language=self.language, role=self.role,
             experience_level=self.experience_level, plain_language=self.plain_language))
         self._check(generation)
         r.last_question_text = composed.question_only or composed.text
-        await self._say(Speech(f"{confirmation} {composed.text}".strip(), "LANGUAGE_SWITCH", q["id"], q["question_text"]))
+        await self._say(Speech(composed.text, "LANGUAGE_SWITCH", q["id"], q["question_text"]))
 
     # ---------------------------------------------------------------- moving on
     async def _advance_and_ask(self, generation: int, mentioned: list[str], prefix: str = "") -> None:

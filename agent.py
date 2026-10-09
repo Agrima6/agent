@@ -169,6 +169,10 @@ class InterviewerAgent(Agent):
             logger.info("barge-in during action=%s question=%s", speech.action, speech.question_id)
 
 
+STT_VOCABULARY_HINT = ("Job interview with Arav from WorkmateIQ. Hindi, English, Hinglish, project, React, Python, Java, API, "
+                       "database, team, manager, experience.")
+
+
 class VoiceProviderError(RuntimeError):
     """The interview's chosen voice provider cannot be used (for example its credentials are missing)."""
 
@@ -253,8 +257,10 @@ async def entrypoint(ctx: JobContext):
             essential = [u for text in refusals.fixed_phrases(language, essential_only=True)
                          for u in speech_units(prepare_for_speech(text))]
             sarvam.set_cacheable(all_units)
+        # A short vocabulary hint: Whisper spells the words it is told to expect. Without it "Hinglish" came out as
+        # "हुजुबुरी" and a request to change language was missed.
         stt_engine = lk_groq.STT(model="whisper-large-v3-turbo", api_key=GROQ_API_KEY,
-                                 language=LANGUAGE_CONFIGS[language]["stt_language"])
+                                 language=LANGUAGE_CONFIGS[language]["stt_language"], prompt=STT_VOCABULARY_HINT)
         current_voice = voice
 
         async def apply_language(new_language: str) -> None:

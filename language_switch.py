@@ -11,9 +11,9 @@ import re
 MAX_WORDS = 14                      # a request is short; a paragraph that mentions Hindi is an answer
 
 _LANGS = {
-    "hinglish": r"hinglish|hindlish",
-    "hi": r"hindi|hindee|हिंदी|हिन्दी",
-    "en": r"english|angrezi|angrejhi|अंग्रेज़ी|अंग्रेजी|इंग्लिश",
+    "hinglish": r"hinglish|hindlish|हिंग्लिश|हिंगलिश|हिन्ग्लिश|हिंग्लीश|हिंगलीश",
+    "hi": r"hindi|hindee|हिंदी|हिन्दी|हिंदि",
+    "en": r"english|angrezi|angrejhi|अंग्रेज़ी|अंग्रेजी|अंग्रेज़ी|इंग्लिश|इंगलिश|इंग्लीश|इंगरिश|इंग्रेजी",
 }
 _ANY_LANG = "|".join(f"(?:{p})" for p in _LANGS.values())
 
@@ -25,7 +25,7 @@ _REQUEST = re.compile(
     r"|(?:" + _ANY_LANG + r")\b\s*(?:please|pls|plz|mein|me|men|main|mai|में|मे|bolo|boliye|bol|baat|chalega|chahiye|only|instead)"
     r"|(?:speak|talk|ask|reply|respond|continue|switch|change|convert|interview|conduct|go|use)\b[^.?!]{0,25}?\b(?:in|to|into|with)\b[^.?!]{0,8}?(?:" + _ANY_LANG + r")"
     r"|(?:bolo|boliye|bolna|baat|baatcheet|karo|kariye|kijiye|कीजिए|करो|बोलो|बोलिए|बात)\b[^.?!]{0,25}?(?:" + _ANY_LANG + r")"
-    r"|(?:" + _ANY_LANG + r")[^.?!]{0,25}?(?:bolo|boliye|bolna|baat|karo|kariye|kijiye|बोलो|बोलिए|बात|कीजिए|करो|चाहिए|चलेगा)"
+    r"|(?:" + _ANY_LANG + r")[^.?!]{0,25}?(?:bolo|boliye|bolna|baat|karo|kariye|kijiye|बोलो|बोलिए|बोल|बात|कीजिए|करो|चाहिए|चलेगा|सकते|सकता|सकती)"
     r"|(?:i|we|mujhe|hum|main)\b[^.?!]{0,25}?(?:want|prefer|need|like|chahiye|chahta|chahti|comfortable|better|easier)[^.?!]{0,25}?(?:" + _ANY_LANG + r")"
     r"|(?:switch|change|set)\b[^.?!]{0,20}?language"
     r")",

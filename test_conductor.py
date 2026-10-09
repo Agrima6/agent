@@ -538,7 +538,7 @@ async def test_asking_for_hindi_switches_everything_and_repeats_the_question(har
     assert h.conductor.language == "hi"
     assert applied == ["hi"]                                              # speech recognition + voice were retuned
     assert spoken.action == "LANGUAGE_SWITCH"
-    assert spoken.text.startswith(refusals.LANGUAGE_SWITCHED["hi"])        # confirms in the new language...
+    assert h.spoken[-2].text == refusals.LANGUAGE_SWITCHED["hi"]           # confirms at once in the new language...
     assert spoken.question_id == "q1" and spoken.question_text == Q1["question_text"]   # ...then asks the same question again
     assert h.posted("language") == [{"language": "hi"}]                   # saved, so a reconnect resumes in Hindi
     assert (h.runner.idx, h.runner.state.followup_count) == before        # no question skipped, no follow-up used
@@ -576,3 +576,42 @@ async def test_mentioning_a_language_inside_an_answer_is_not_a_switch(harness_fa
     h = harness_factory(evaluations=[strong()], composer_responses=[followup("Interesting, tell me more.")])
     await h.say("I built a Hindi chatbot for support using transformers")
     assert h.conductor.language == "en" and h.judge_calls                  # treated as an answer
+
+
+HI_Q1 = "HashMap आंतरिक रूप से कैसे काम करता है?"
+HI_Q2 = "आप एक public API के लिए rate limiter कैसे design करेंगे?"
+
+
+async def test_the_switch_asks_the_question_in_the_new_language_not_english(harness_factory):
+    batch = {"questions": [{"id": "q1", "text": HI_Q1}, {"id": "q2", "text": HI_Q2}, {"id": "q3", "text": "आपने production में कौन सी मुश्किल issue debug की?"}]}
+    h = harness_factory(composer_responses=[batch])
+    spoken = await h.say("Can you speak in Hindi please")
+    assert HI_Q1 in spoken.text and "How does a HashMap" not in spoken.text         # the question itself is Hindi now
+    assert h.spoken[-2].text == refusals.LANGUAGE_SWITCHED["hi"]
+    assert len(h.provider.calls) == 1                                               # ONE call translated every remaining question
+
+
+async def test_later_questions_are_already_translated_so_nothing_waits_or_falls_back_to_english(harness_factory):
+    batch = {"questions": [{"id": "q1", "text": HI_Q1}, {"id": "q2", "text": HI_Q2}]}
+    h = harness_factory(composer_responses=[batch], evaluations=[strong()], depth_probe=False)   # a strong answer moves straight on
+    await h.say("Hindi mein baat karo")
+    calls_after_switch = len(h.provider.calls)
+    spoken = await h.say("It hashes the key and finds a bucket, then handles collisions with chaining and resizing.")
+    assert HI_Q2 in spoken.text and "rate limiter for a public API" not in spoken.text   # the next question is Hindi
+    assert len(h.provider.calls) == calls_after_switch                                  # served from the pre-translated set
+
+
+async def test_a_translation_that_comes_back_wrong_is_ignored_not_spoken(harness_factory):
+    bad = {"questions": [{"id": "q1", "text": "सब ठीक है"}, {"id": "nope", "text": HI_Q2}]}   # lost the technical term; unknown id
+    h = harness_factory(composer_responses=[bad, {"action": "NEXT_QUESTION", "candidateFacingText": HI_Q1}])
+    spoken = await h.say("Hindi mein baat karo")
+    assert "सब ठीक है" not in spoken.text and HI_Q1 in spoken.text                      # fell back to localising that one question
+
+
+async def test_a_hindi_interview_prepares_its_questions_in_the_background(harness_factory):
+    batch = {"questions": [{"id": "q1", "text": HI_Q1}, {"id": "q2", "text": HI_Q2}]}
+    h = harness_factory(language="hi", composer_responses=[batch])
+    await h.conductor.start()
+    for task in list(h.conductor._localizing):
+        await task
+    assert h.conductor._localized[("q1", "hi")] == HI_Q1 and h.conductor._localized[("q2", "hi")] == HI_Q2
