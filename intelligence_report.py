@@ -116,7 +116,21 @@ def build_intelligence(plan: dict, question_reports: list[dict], coverage_rows: 
                 contradictions.append({"claim": None, "note": e["inconsistency"], "question_id": qid,
                                        "needs_human_review": True})
 
-    return {"hr_focus_coverage": focus_coverage, "resume_validation": resume_validation,
+    # HR's own questions: reached or not. A required question the interview never got to (time ran out, an early end) is
+    # shown as NOT_REACHED so it can never be mistaken for one that was asked.
+    hr_question_coverage = []
+    for q in questions:
+        if q.get("type") != "hr":
+            continue
+        answered = q["id"] in reports
+        hr_question_coverage.append({
+            "question_id": q["id"], "question": str(q["question_text"])[:400], "topic": q.get("topic") or None,
+            "status": "ANSWERED" if answered else "NOT_REACHED", "score": _score(reports.get(q["id"])),
+            "follow_up_depth": depth(q["id"]) if answered else 0,
+        })
+    return {"hr_question_coverage": hr_question_coverage,
+            "hr_questions_not_reached": [c["question"] for c in hr_question_coverage if c["status"] == "NOT_REACHED"],
+            "hr_focus_coverage": focus_coverage, "resume_validation": resume_validation,
             "contradictions": contradictions,
             "unasked_high_priority": [f["focus"] for f in focus_coverage
                                       if f["priority"] == "HIGH" and f["status"] in ("NOT_ASKED", "NOT_ANSWERED")],
