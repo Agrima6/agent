@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable
 
+from language_policy import looks_like_repetition_hallucination
+
 
 class Intent(str, Enum):
     ANSWER = "answer"
@@ -350,6 +352,9 @@ def classify(text: str, *, context: "Iterable[str] | None" = None) -> Classifica
         return Classification(Intent.EMPTY, "no-alnum")
     if words <= 3 and (_FILLER_ONLY.match(stripped) or stripped.lower() in _HALLUCINATIONS):
         return Classification(Intent.EMPTY, "filler")
+
+    if looks_like_repetition_hallucination(text):
+        return Classification(Intent.EMPTY, "repetition-hallucination")
 
     substantive = is_substantive_answer(text, context)
     if any(p.search(text) for p in _INJECTION):

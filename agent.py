@@ -34,6 +34,7 @@ from config import (AGENT_NAME, AGENT_SERVICE_KEY, API_BASE_URL, ELEVENLABS_API_
                     ELEVENLABS_VOICE_ID_MALE, GROQ_API_KEY, AUTO_LANGUAGE,
                     OPENAI_API_KEY, SARVAM_API_KEY, TTS_PROVIDER, TTS_VOICE, VOICE_PROVIDER_FALLBACK)
 from edge_tts_plugin import EdgeTTS
+from language_policy import clean_transcript
 from languages import LANGUAGE_CONFIGS, normalize_language
 import refusals
 import turn_trace
@@ -169,7 +170,9 @@ class InterviewerAgent(Agent):
     async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
         heard = new_message.text_content or ""
         turn_trace.mark("turn_committed")
-        self._publish_line("candidate", heard)
+        # The caption shows the transcript without Arabic-script runs (Whisper's rendering of Hindi words); the full
+        # original is what the conductor stores.
+        self._publish_line("candidate", clean_transcript(heard)[0] or heard)
         await self.conductor.handle_candidate_turn(heard)
         raise StopResponse()  # every reply is produced by the conductor; never by a free-form LLM
 
@@ -201,6 +204,19 @@ ELEVENLABS_ENGLISH_ONLY_MODELS = frozenset({"eleven_monolingual_v1", "eleven_tur
 # the text of each sentence (the cause of an English sentence being read with Urdu-style pronunciation, and of
 # romanised Hindi being read as English).
 ELEVENLABS_LANGUAGE_CODE_MODELS = frozenset({"eleven_flash_v2_5", "eleven_turbo_v2_5", "eleven_v3"})
+
+
+def stt_options_for(language: str, auto_language: bool) -> dict:
+    """Whisper options for an interview language.
+
+    Hindi and Hinglish sessions PIN the recogniser to Hindi, whatever AUTO_LANGUAGE says. Left to detect the language per
+    utterance, Whisper labelled Indian-accented Hindi/Hinglish as Urdu and wrote it in Arabic script (a live session
+    showed "... in the country. بہت سارے کارے ہیں"); pinned to Hindi it writes Devanagari, which the rest of the
+    pipeline understands. English sessions keep detection when AUTO_LANGUAGE is on, so a candidate who answers in Hindi
+    is still heard (and then guarded by the script policy)."""
+    if language in ("hi", "hinglish"):
+        return {"language": "hi", "detect_language": False}
+    return {"language": "en", "detect_language": bool(auto_language)}
 
 
 def is_candidate_identity(identity: str) -> bool:
@@ -320,9 +336,8 @@ async def entrypoint(ctx: JobContext):
         # candidate who starts speaking Hindi is heard as Hindi (a recogniser locked to English turns Hindi into English-
         # sounding nonsense). The conductor then follows the language they speak. AUTO_LANGUAGE=false restores one fixed
         # language per interview.
-        stt_engine = lk_groq.STT(model="whisper-large-v3-turbo", api_key=GROQ_API_KEY,
-                                 language=LANGUAGE_CONFIGS[language]["stt_language"], prompt=STT_VOCABULARY_HINT,
-                                 detect_language=AUTO_LANGUAGE)
+        stt_engine = lk_groq.STT(model="whisper-large-v3-turbo", api_key=GROQ_API_KEY, prompt=STT_VOCABULARY_HINT,
+                                 **stt_options_for(language, AUTO_LANGUAGE))
         current_voice = voice
 
         async def apply_language(new_language: str) -> None:
@@ -330,8 +345,7 @@ async def entrypoint(ctx: JobContext):
             SPEAKS (voice), for the rest of this session. Writing and what is saved are handled by the conductor."""
             nonlocal current_voice
             cfg = LANGUAGE_CONFIGS[normalize_language(new_language)]
-            if not AUTO_LANGUAGE:                         # with auto-detection the recogniser already follows the speaker
-                stt_engine.update_options(language=cfg["stt_language"])
+            stt_engine.update_options(**stt_options_for(normalize_language(new_language), AUTO_LANGUAGE))
             current_voice = resolve_voice(new_language, voice_prefs.get("gender"), voice_prefs.get("speaker"),
                                           voice_prefs.get("pace"), provider=voice_provider)
             if voice_provider == "elevenlabs" and ELEVENLABS_MODEL in ELEVENLABS_LANGUAGE_CODE_MODELS \

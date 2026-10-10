@@ -9,6 +9,7 @@ mention a language, so it needs a clear request cue and a short utterance.
 import re
 
 MAX_WORDS = 14                      # a request is short; a paragraph that mentions Hindi is an answer
+MAX_WORDS_EXPLICIT = 40             # ...unless it is an unmistakable instruction ("I am asking you to speak in ...")
 
 _LANGS = {
     "hinglish": r"hinglish|hindlish|हिंग्लिश|हिंगलिश|हिन्ग्लिश|हिंग्लीश|हिंगलीश",
@@ -82,21 +83,62 @@ def detect_unsupported_language_request(text: str) -> str | None:
     return named[0]
 
 
+# "not asking you to speak in English", "don't use Hindi": a negated language is something the candidate does NOT want.
+_NEGATED = re.compile(
+    r"(?:\bnot\b|n't\b|\bnever\b|\bno\b)[^.?!]{0,40}?(?:" + _ANY_LANG + r")", re.IGNORECASE)
+# An unmistakable instruction, allowed to be longer than a quick request.
+_EXPLICIT = re.compile(
+    r"\b(?:speak|talk|reply|respond|answer|continue|converse|switch|change|interview|conduct|ask|go)\w*\b[^.?!]{0,40}?"
+    r"\b(?:in|to|into|with)\b[^.?!]{0,30}?(?:" + _ANY_LANG + r")"
+    # ...or the bare imperative "speak English", "talk Hindi" (a statement like "I can speak Hindi" is filtered separately)
+    r"|\b(?:speak|talk|reply|respond|answer|continue|converse)\w*\s+(?:in\s+|to\s+)?(?:" + _ANY_LANG + r")", re.IGNORECASE)
+_COMBINATION = re.compile(r"\b(?:combination|mix(?:ed|ture)?|blend|both|code[- ]?mix\w*|mixture)\b", re.IGNORECASE)
+# A reply that is nothing but a language name ("Hinglish,", "Hindi please", "in English"), e.g. the answer to
+# "could you say it again in English, Hindi or Hinglish?".
+_FILLER_WORDS = frozenset("""please pls plz in only ok okay yes sir ji mein me main men bolo boliye bol baat karo kariye
+kijiye speak talk language the a an to use""".split())
+
+
+def detect_language_choice(text: str) -> str | None:
+    """A whole utterance that just names one supported language, or None."""
+    words = [w.lower() for w in _WORD.findall(text or "")]
+    if not words or len(words) > 5:
+        return None
+    named = [code for code, pattern in _LANGS.items()
+             if any(re.fullmatch(pattern, w, re.IGNORECASE) for w in words)]
+    if len(named) != 1:
+        return None
+    others = [w for w in words if not re.fullmatch(_LANGS[named[0]], w, re.IGNORECASE) and w not in _FILLER_WORDS]
+    return named[0] if not others else None
+
+
 def detect_language_request(text: str, current: str | None = None) -> str | None:
     """The language code the candidate asked to switch to, or None. A request for the language already in use is
     not a switch (returns None)."""
     if not text:
         return None
     cleaned = " ".join(text.strip().split())
-    if len(_WORD.findall(cleaned)) > MAX_WORDS:
+    n_words = len(_WORD.findall(cleaned))
+    if n_words > MAX_WORDS_EXPLICIT:
         return None
-    asked = [code for code, pattern in _LANGS.items() if re.search(pattern, cleaned, re.IGNORECASE)]
-    # "hinglish" contains no "hindi", but guard anyway: more than one language named = ambiguous, ask nothing.
+    choice = detect_language_choice(cleaned)
+    if choice:
+        return None if choice == current else choice
+    # a negated language ("I am not asking you to speak in English") is not what they are asking for
+    positive = _NEGATED.sub(" ", cleaned)
+    if n_words > MAX_WORDS and not _EXPLICIT.search(positive):
+        return None
+    asked = [code for code, pattern in _LANGS.items() if re.search(pattern, positive, re.IGNORECASE)]
     asked = list(dict.fromkeys(asked))
+    if "hinglish" in asked:
+        asked = ["hinglish"]                                   # "Hindi and English, that is Hinglish": Hinglish
+    elif set(asked) == {"hi", "en"} and _COMBINATION.search(positive):
+        asked = ["hinglish"]                                   # "a combination of Hindi and English"
     if len(asked) != 1:
         return None
-    if not _REQUEST.search(cleaned):
+    if not _REQUEST.search(positive) and not _EXPLICIT.search(positive):
         return None
-    if _STATEMENT.search(cleaned) and not re.search(r"(?:can|could|would|will|may)\s+(?:you|we)|please|pls|plz|chahiye|want|prefer", cleaned, re.IGNORECASE):
+    if _STATEMENT.search(positive) and not re.search(
+            r"(?:can|could|would|will|may)\s+(?:you|we)|please|pls|plz|chahiye|want|prefer|asking", positive, re.IGNORECASE):
         return None
     return None if asked[0] == current else asked[0]

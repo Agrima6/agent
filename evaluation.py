@@ -17,6 +17,7 @@ Rules (each one is a verified failure mode - see WORKMATEIQ_AI_AGENT_ROOT_CAUSE_
     otherwise never assessed. All scores are 0-100.
 """
 from interaction_guard import NON_ANSWER_INTENTS
+from language_policy import clean_transcript
 
 INTRO_TYPES = ("introduction", "candidate_introduction")
 _NON_ANSWER_VALUES = {i.value for i in NON_ANSWER_INTENTS}
@@ -42,8 +43,9 @@ def answer_text_for(turns, question_id: str) -> str:
     for turn in turns:
         if turn.question_id != question_id or not is_answer_turn(turn):
             continue
-        text = turn.text.strip()
-        if kept and kept[-1] == text:        # the same line delivered twice
+        # The working text drops Arabic-script runs (Whisper's rendering of Hindi words); the stored original is untouched.
+        text = clean_transcript(turn.text.strip())[0].strip()
+        if not text or (kept and kept[-1] == text):       # nothing left, or the same line delivered twice
             continue
         kept.append(text)
     return "\n".join(kept)
