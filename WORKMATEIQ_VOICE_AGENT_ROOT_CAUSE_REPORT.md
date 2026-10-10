@@ -55,3 +55,34 @@ Whisper's language to the session language, which is the single most effective g
 * `ELEVENLABS_MODEL` must be multilingual (default `eleven_flash_v2_5`) for Hindi/Hinglish sessions.
 * The ElevenLabs API key needs the **Text to Speech** permission.
 * No database migration.
+
+---
+
+# Addendum B — Live Hinglish session (screenshots) : tester findings and fixes
+
+Source: two screenshots of a real interview (Live Transcript 14 → 23 lines, 02:13 → 03:12). Every defect below was
+reproduced in code with the exact utterance before it was fixed; replayed in `test_hinglish_session_bugs.py`
+(30 tests). Whisper's own behaviour on audio remains unverified here.
+
+| # | What the candidate saw | Root cause (CONFIRMED in code) | Fix |
+|---|---|---|---|
+| B1 | "Wait. I am not asking you to speak in English. I am asking you to speak in a combination of Hindi and English that is Hinglish. Are you dumb or what?" → "That's outside what we can cover…" | The request was 31 words (limit 14), named three languages (treated as ambiguous), contained a negated language, and an insult. It fell through to the judge → `off_topic` refusal | `detect_language_request`: explicit instructions up to 40 words, negated languages ignored, "Hinglish" / "combination of Hindi and English" resolve to Hinglish |
+| B2 | Replying "Hinglish," to "say it again in English, Hindi or Hinglish?" was treated as an answer | A bare language name was not recognised | `detect_language_choice` (whole utterance = a language name, ≤5 words) |
+| B3 | English sentence ending in Urdu script ("… in the country. بہت سارے کارے ہیں") shown and judged | Whisper wrote Hindi words in Urdu script; the unsupported-script guard needs ≥30% Arabic letters, this was 14% | `clean_transcript`: Arabic-script runs removed from the working text (judge, caption, scoring); original kept verbatim in `interview_turns.text`; if <3 words remain → "say it again" |
+| B4 | Interview silently returned to English after the candidate asked for Hindi | `LanguageFollower` switched Hindi→English after two English answers - overriding an explicit request. English technical answers inside a Hinglish interview are normal | Explicit request **locks** the language (`_language_locked`); auto-follow is off until another explicit request |
+| B5 | "Let's try another question." after only language chatter | Three refusals on one question trigger `MOVE_ON`; the hallucination, the long request and "Hinglish," each counted as a refusal | Language requests/choices, unsupported-script and hallucination turns are neutral (never counted); B1/B2/B6 remove the refusals themselves |
+| B6 | "I won't tell anyone, because I won't tell anyone…" answered with "Let's stay focused on the interview" (in Hindi) | Whisper repetition hallucination judged as an off-topic answer | `looks_like_repetition_hallucination` → treated as noise ("I didn't catch that") |
+| B7 | Hindi/Hinglish speech written in Urdu script at all | `AUTO_LANGUAGE=true` omits Whisper's language; the Groq turbo model returns no language code, so it cannot be seen or corrected | Hindi and Hinglish sessions **pin Whisper to Hindi** (`stt_options_for`), also re-applied on every switch. English sessions keep detection |
+| B8 | Lag after a language switch | `_switch_language` awaited a translation of **every remaining question** (batch deadline 15 s) before asking | Only the question about to be asked is translated on the critical path; the rest in the background |
+
+## Behaviour changes to be aware of
+* In a Hindi/Hinglish session English technical words may now appear in Devanagari in captions (Whisper pinned to
+  Hindi transliterates them). Judge and scoring handle it; it is cosmetic.
+* An explicit language request is sticky for the session; the candidate must ask again to change it.
+
+## Still unverified / open
+* Whether pinning to Hindi removes the Urdu-script output on this candidate's real audio (needs the same recording).
+* The remaining lag is not measured: with `TURN_MIN_DELAY_S=2.0` every reply waits at least 2 s after the candidate stops.
+  Read `turn_trace` (`ttfa_ms`, `judge_ms`, `compose_ms`) and `turn_trace_tts` from a session before tuning; lowering
+  `TURN_MIN_DELAY_S` to 1.2–1.5 trades pause tolerance for speed.
+* Proper names are mis-heard by Whisper ("Nareenr Modi"); no fix without a vocabulary list.

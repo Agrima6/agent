@@ -34,6 +34,47 @@ def has_unexpected_script(text: str) -> bool:
     return profile["arabic"] >= MIN_ARABIC_LETTERS and profile["arabic_share"] >= MIN_ARABIC_SHARE
 
 
+_ARABIC_RUN = re.compile(r"[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿][؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿\s،؛؟۔]*")
+MIN_WORDS_AFTER_CLEANING = 3
+
+
+def clean_transcript(text: str) -> tuple[str, int]:
+    """The transcript with any Arabic-script runs removed, and how many letters were removed.
+
+    Whisper often writes the Hindi words of a Hinglish sentence in Urdu script ("... in the country. بہت سارے کارے ہیں").
+    Those runs are not something a supported-language candidate said in that script; they are the recogniser's rendering
+    of Hindi, and left in they reach the judge, the caption stream and the report. The ORIGINAL text is always kept as
+    the source record (interview_turns.text); this view is computed from it on demand, so it is always traceable and is
+    never stored in its place."""
+    if not text:
+        return "", 0
+    removed = len(_ARABIC_SCRIPT.findall(text))
+    if not removed:
+        return text, 0
+    cleaned = _ARABIC_RUN.sub(" ", text)
+    return re.sub(r"\s+", " ", cleaned).strip(), removed
+
+
+_WORDS = re.compile(r"[\w']+", re.UNICODE)
+
+
+def looks_like_repetition_hallucination(text: str) -> bool:
+    """Whisper's familiar failure on mumbling or low-level noise: one short clause repeated three or more times
+    ("I won't tell anyone, because I won't tell anyone. And I won't tell anyone about ..."). Real answers do not
+    say the same 3-6 word phrase three times; this is noise to be re-asked, not an answer to be judged."""
+    words = [w.lower() for w in _WORDS.findall(text or "")]
+    if len(words) < 9:
+        return False
+    for n in range(3, 7):
+        seen: dict[tuple, int] = {}
+        for i in range(len(words) - n + 1):
+            gram = tuple(words[i:i + n])
+            seen[gram] = seen.get(gram, 0) + 1
+            if seen[gram] >= 3:
+                return True
+    return False
+
+
 def supported_language_labels() -> list[str]:
     from languages import LANGUAGE_CONFIGS
     return [cfg["label"] for cfg in LANGUAGE_CONFIGS.values()]

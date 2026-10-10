@@ -583,18 +583,29 @@ HI_Q2 = "आप एक public API के लिए rate limiter कैसे des
 
 
 async def test_the_switch_asks_the_question_in_the_new_language_not_english(harness_factory):
-    batch = {"questions": [{"id": "q1", "text": HI_Q1}, {"id": "q2", "text": HI_Q2}, {"id": "q3", "text": "आपने production में कौन सी मुश्किल issue debug की?"}]}
-    h = harness_factory(composer_responses=[batch])
+    first = {"questions": [{"id": "q1", "text": HI_Q1}]}
+    rest = {"questions": [{"id": "q2", "text": HI_Q2}, {"id": "q3", "text": "आपने production में कौन सी मुश्किल issue debug की?"}]}
+    h = harness_factory(composer_responses=[first, rest])
     spoken = await h.say("Can you speak in Hindi please")
     assert HI_Q1 in spoken.text and "How does a HashMap" not in spoken.text         # the question itself is Hindi now
     assert h.spoken[-2].text == refusals.LANGUAGE_SWITCHED["hi"]
-    assert len(h.provider.calls) == 1                                               # ONE call translated every remaining question
+    # The candidate waits for ONE question only (the one about to be asked); the remaining plan is translated in a second,
+    # background call so a language switch never stalls on the whole interview.
+    first_call = h.provider.calls[0]["user"]
+    assert "How does a HashMap" in first_call and "rate limiter" not in first_call
+    await asyncio.sleep(0)
+    for task in list(h.conductor._localizing):
+        await task
+    assert len(h.provider.calls) == 2 and "rate limiter" in h.provider.calls[1]["user"]
 
 
 async def test_later_questions_are_already_translated_so_nothing_waits_or_falls_back_to_english(harness_factory):
-    batch = {"questions": [{"id": "q1", "text": HI_Q1}, {"id": "q2", "text": HI_Q2}]}
-    h = harness_factory(composer_responses=[batch], evaluations=[strong()], depth_probe=False)   # a strong answer moves straight on
+    first = {"questions": [{"id": "q1", "text": HI_Q1}]}
+    rest = {"questions": [{"id": "q2", "text": HI_Q2}]}
+    h = harness_factory(composer_responses=[first, rest], evaluations=[strong()], depth_probe=False)   # strong answer moves on
     await h.say("Hindi mein baat karo")
+    for task in list(h.conductor._localizing):          # the background translation of the rest of the plan
+        await task
     calls_after_switch = len(h.provider.calls)
     spoken = await h.say("It hashes the key and finds a bucket, then handles collisions with chaining and resizing.")
     assert HI_Q2 in spoken.text and "rate limiter for a public API" not in spoken.text   # the next question is Hindi

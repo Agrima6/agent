@@ -36,7 +36,7 @@ import refusals
 from composer import ComposeRequest, Composed, Composer
 from language_detect import LanguageFollower
 from language_switch import detect_language_request, detect_unsupported_language_request
-from language_policy import has_unexpected_script
+from language_policy import (MIN_WORDS_AFTER_CLEANING, clean_transcript, has_unexpected_script)
 from interaction_guard import Classification, Intent, RESTRICTED_INTENTS, classify
 from languages import normalize_language
 from policy import Action, Evaluation, decide_action, judge_answer, restricted_intent_from_judge
@@ -117,6 +117,10 @@ class InterviewConductor:
         # while the first is still in flight is one answer reported twice (a duplicated end-of-turn event, or a
         # "done speaking" press racing the detector) - it must not be answered twice or advance twice.
         self._inflight_turns: set[str] = set()
+        # Once the candidate has explicitly asked for a language, auto-follow is OFF for the rest of the session: a Hinglish
+        # speaker answering a technical question in English must not be switched back to English behind their request.
+        self._language_locked = False
+        self._turn_original: str | None = None    # the transcript exactly as heard, for the turn being handled
         self.turns = TurnStateMachine()          # QUESTION_DELIVERED -> ... -> ANSWER_SAVED -> DECIDING (see turn_state.py)
         self._advanced_turn = 0                  # the finalized-turn number that already advanced the interview
 
@@ -228,12 +232,14 @@ class InterviewConductor:
         finally:
             turn_trace.mark("compose_end")
 
-    async def _localize_upcoming(self, language: str, *, wait: bool) -> None:
+    async def _localize_upcoming(self, language: str, *, wait: bool, limit: int | None = None) -> None:
         """Render the current and remaining questions into `language` in one call and remember them. With wait=False it
         runs in the background (so the interview is never held up by it)."""
         language = normalize_language(language)
         r = self.runner
         todo = [q for q in r.questions[r.idx:] if q.get("question_text") and (str(q.get("id")), language) not in self._localized]
+        if limit is not None:
+            todo = todo[:limit]
         if language == "en" or not todo:
             return
 
@@ -278,12 +284,20 @@ class InterviewConductor:
     def _record_candidate(self, text: str, intent: Intent | str, *, followup: bool = False) -> None:
         r = self.runner
         q = r.current_question
-        r.record_turn_nowait(q["id"] if q else "", "candidate", text, is_followup=followup,
+        r.record_turn_nowait(q["id"] if q else "", "candidate", self._turn_original or text, is_followup=followup,
                              intent=intent.value if isinstance(intent, Intent) else intent,
                              question_text=(q or {}).get("question_text") or "")
 
     # ---------------------------------------------------------------- turn routing
     async def _handle(self, text: str, generation: int) -> None:
+        r = self.runner
+        self._turn_original = text
+        try:
+            await self._handle_turn(text, generation)
+        finally:
+            self._turn_original = None
+
+    async def _handle_turn(self, text: str, generation: int) -> None:
         r = self.runner
         # "Can you speak in Hindi?" changes the interview language for the rest of the session.
         requested_language = detect_language_request(text, current=self.language)
@@ -302,9 +316,17 @@ class InterviewConductor:
             return await self._unsupported_language(text, requested=True)
         if has_unexpected_script(text):
             return await self._unsupported_language(text, requested=False)
+        # Whisper renders the Hindi words of a Hinglish sentence in Urdu script, even inside an otherwise English
+        # transcript. Judge, caption and report work from the transcript WITHOUT those runs; the original stays on record.
+        cleaned, removed = clean_transcript(text)
+        if removed:
+            self._event("unexpected_script_removed", letters=removed)
+            if len(cleaned.split()) < MIN_WORDS_AFTER_CLEANING:
+                return await self._unsupported_language(text, requested=False)
+            text = cleaned
         # The candidate simply started answering in another language: follow them quietly, then handle what they said as
-        # a normal answer (no announcement, nothing re-asked).
-        if self._follower is not None:
+        # a normal answer (no announcement, nothing re-asked) - but never against an explicit request.
+        if self._follower is not None and not self._language_locked:
             followed = self._follower.observe(text, self.language)
             if followed and followed != self.language and (
                     not self.supported_languages or followed in self.supported_languages):
@@ -504,17 +526,20 @@ class InterviewConductor:
         r = self.runner
         q = r.current_question
         self._record_candidate(text, Intent.LANGUAGE_REQUEST)
+        self._language_locked = True                 # an explicit choice is sticky: only another request changes it
         await self._apply_language(new_language, generation)
         confirmation = refusals.LANGUAGE_SWITCHED[self.language]
         asking_now = not (q is None or not q.get("question_text") or r.small_talk_done < r.small_talk_rounds)
-        # Translate the current and all later questions in ONE call while the confirmation is being spoken, so the
-        # candidate hears an answer straight away instead of a silence.
-        translating = asyncio.get_running_loop().create_task(self._localize_upcoming(self.language, wait=True))
+        # While the confirmation is spoken, translate ONLY the question about to be asked, so the candidate is not left
+        # waiting on the whole remaining plan (a batch of every later question could take up to
+        # LOCALIZE_BATCH_DEADLINE). The rest is translated in the background, ready before it is needed.
+        translating = asyncio.get_running_loop().create_task(self._localize_upcoming(self.language, wait=True, limit=1))
         try:
             await self._say(Speech(confirmation, "LANGUAGE_SWITCH", q["id"] if q else "", ""))
             self._check(generation)
         finally:
             await translating
+        await self._localize_upcoming(self.language, wait=False)       # the remaining questions, off the critical path
         if not asking_now:
             return
         self._check(generation)
