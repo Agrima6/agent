@@ -42,6 +42,46 @@ _STATEMENT = re.compile(
 _WORD = re.compile(r"[\wऀ-ॿ']+")
 
 
+# Languages people may ask for that this interview cannot conduct. Only a fixed label is ever returned.
+_UNSUPPORTED = {
+    "Urdu": r"urdu|اردو",
+    "Punjabi": r"punjabi|panjabi|ਪੰਜਾਬੀ|पंजाबी",
+    "Tamil": r"tamil|தமிழ்|तमिल",
+    "Telugu": r"telugu|తెలుగు|तेलुगु",
+    "Bengali": r"bengali|bangla|বাংলা|बंगाली",
+    "Marathi": r"marathi|मराठी",
+    "Gujarati": r"gujarati|ગુજરાતી|गुजराती",
+    "Kannada": r"kannada|ಕನ್ನಡ|कन्नड़",
+    "Malayalam": r"malayalam|മലയാളം|मलयालम",
+    "Arabic": r"arabic|العربية",
+    "French": r"french|français",
+    "Spanish": r"spanish|español",
+    "German": r"german|deutsch",
+}
+
+
+def detect_unsupported_language_request(text: str) -> str | None:
+    """The (fixed) name of an unsupported language the candidate asked to use, or None.
+
+    Same conservatism as detect_language_request: a short utterance with a clear request cue. "I know Tamil" or a long
+    answer that mentions a language is not a request."""
+    if not text:
+        return None
+    cleaned = " ".join(text.strip().split())
+    if len(_WORD.findall(cleaned)) > MAX_WORDS:
+        return None
+    named = [label for label, pattern in _UNSUPPORTED.items() if re.search(pattern, cleaned, re.IGNORECASE)]
+    if len(named) != 1:
+        return None
+    request_cue = re.compile(
+        r"(?:can|could|may|shall|would|will)\s+(?:i|we|you|u)\b|\bplease\b|\bpls\b|\bplz\b|\bwant\b|\bprefer\b|\bneed\b|"
+        r"\b(?:speak|talk|answer|reply|respond|continue|switch|interview|conduct)\b|\bchahiye\b|\bbol", re.IGNORECASE)
+    if not request_cue.search(cleaned) or _STATEMENT.search(cleaned) and not re.search(
+            r"(?:can|could|would|will|may)\s+(?:i|you|we)|please|pls|plz|chahiye|want|prefer", cleaned, re.IGNORECASE):
+        return None
+    return named[0]
+
+
 def detect_language_request(text: str, current: str | None = None) -> str | None:
     """The language code the candidate asked to switch to, or None. A request for the language already in use is
     not a switch (returns None)."""

@@ -71,6 +71,8 @@ class TurnTracer:
         self.current: TurnTrace | None = None
         self._seq = 0
         self._early: dict[str, float] = {}     # marks that can arrive just BEFORE the turn is opened
+        self.last_report: dict | None = None   # the most recently finished turn (TTS metrics arrive after it)
+        self._tts_noted_for: str | None = None
 
     def begin(self, kind: str = "candidate_turn") -> TurnTrace:
         self._seq += 1
@@ -100,8 +102,26 @@ class TurnTracer:
         # ttfa_ms is measured from when VAD CONFIRMED the end of speech; the candidate actually stopped
         # about `vad_min_silence_ms` earlier than that.
         report["vad_min_silence_ms"] = self.vad_min_silence_ms
+        self.last_report = report
         logger.info("turn_trace %s", json.dumps(report))
         return report
+
+    def note_tts_metrics(self, ttfb_s: float | None, *, streamed: bool | None = None,
+                         connection_reused: bool | None = None) -> dict | None:
+        """Providers other than Sarvam (ElevenLabs) do not fill the tts_* marks; LiveKit reports their time-to-first-
+        byte in a TTS metrics event that arrives when synthesis ends - after the turn line was already written.
+        Attach it to the turn it belongs to as a follow-up line, so no turn's TTS latency is silently missing."""
+        report = self.last_report
+        # Only the FIRST synthesis of a turn is its time-to-first-audio; later sentences' metrics are not.
+        if (report is None or ttfb_s is None or report.get("tts_ttfa_ms") is not None
+                or report.get("turn_id") == self._tts_noted_for):
+            return None
+        self._tts_noted_for = report["turn_id"]
+        follow_up = {"turn_id": report["turn_id"], "tts_ttfa_ms": max(round(ttfb_s * 1000), 0),
+                     "ttfa_ms": report.get("ttfa_ms"), "streamed": streamed, "connection_reused": connection_reused,
+                     "source": "livekit_tts_metrics"}
+        logger.info("turn_trace_tts %s", json.dumps(follow_up))
+        return follow_up
 
     # -- LiveKit session wiring ---------------------------------------------------------------------
     def attach(self, session) -> None:
@@ -117,6 +137,13 @@ class TurnTracer:
             if event.new_state == "speaking" and self.current is not None:
                 self.finish()
 
+        def on_metrics(event) -> None:
+            metric = getattr(event, "metrics", None)
+            if getattr(metric, "type", "") == "tts_metrics" and not getattr(metric, "cancelled", False):
+                self.note_tts_metrics(getattr(metric, "ttfb", None), streamed=getattr(metric, "streamed", None),
+                                      connection_reused=getattr(metric, "connection_reused", None))
+
+        session.on("metrics_collected", on_metrics)
         session.on("user_state_changed", on_user_state)
         session.on("user_input_transcribed", on_transcript)
         session.on("agent_state_changed", on_agent_state)

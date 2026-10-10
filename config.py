@@ -37,6 +37,10 @@ ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "")        # empty = the 
 ELEVENLABS_VOICE_ID_MALE = os.getenv("ELEVENLABS_VOICE_ID_MALE", "")
 ELEVENLABS_VOICE_ID_FEMALE = os.getenv("ELEVENLABS_VOICE_ID_FEMALE", "")
 ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_flash_v2_5")
+# Optional ElevenLabs pronunciation dictionary (technical terms, product and company names, acronyms). Both values
+# come from the dictionary created in the ElevenLabs dashboard; with either missing, none is used.
+ELEVENLABS_PRONUNCIATION_DICTIONARY_ID = os.getenv("ELEVENLABS_PRONUNCIATION_DICTIONARY_ID", "")
+ELEVENLABS_PRONUNCIATION_VERSION_ID = os.getenv("ELEVENLABS_PRONUNCIATION_VERSION_ID", "")
 # Opt-in only: when the chosen provider fails, speak with Edge TTS instead of staying silent. OFF by default:
 # a provider failure is reported, never silently handed to a different provider.
 VOICE_PROVIDER_FALLBACK = os.getenv("VOICE_PROVIDER_FALLBACK", "").lower()

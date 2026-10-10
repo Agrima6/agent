@@ -11,6 +11,7 @@ Whatever an LLM writes is treated as untrusted output. It is only spoken if it p
 Pure functions, no I/O.
 """
 import re
+from language_policy import has_unexpected_script
 
 from interaction_guard import contains_injection
 from speech_prep import split_sentences
@@ -90,6 +91,10 @@ def violations(text: str) -> list[str]:
         problems.append("implies_the_answer_was_wrong")
     if contains_injection(text):
         problems.append("echoes_injection_text")
+    # The interviewer speaks English, Hindi (Devanagari) or Hinglish. Arabic-script text (Urdu) in anything the
+    # interviewer is about to say means the model drifted language: use the deterministic wording instead.
+    if has_unexpected_script(text):
+        problems.append("unsupported_script")
     return problems
 
 

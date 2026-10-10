@@ -217,6 +217,20 @@ LANGUAGE_SWITCHED = {
     "hi": "ज़रूर, अब हम हिंदी में बात करेंगे।",
     "hinglish": "Sure, अब हम Hinglish में बात करेंगे।",
 }
+# Spoken when the candidate asks for, or is transcribed in, a language this interview does not support. Fixed text:
+# nothing the candidate said is echoed, and the interview stays in the language it was in.
+UNSUPPORTED_LANGUAGE = {
+    "en": "I can only conduct this interview in English, Hindi or Hinglish. Please continue in one of those, and I'll repeat the question.",
+    "hi": "मैं यह इंटरव्यू केवल अंग्रेज़ी, हिंदी या हिंग्लिश में ले सकता हूँ। कृपया इनमें से किसी एक में जवाब दीजिए, मैं सवाल दोबारा दोहराता हूँ।",
+    "hinglish": "मैं ये interview सिर्फ़ English, Hindi या Hinglish में ले सकता हूँ। please इनमें से किसी एक में बोलिए, मैं question repeat करता हूँ।",
+}
+# Spoken when the transcript is in a script no supported language uses (the recogniser mis-heard, or the candidate
+# spoke an unsupported language): ask them to say it again rather than evaluating or quoting the garbled text.
+DIDNT_CATCH_LANGUAGE = {
+    "en": "Sorry, I couldn't make that out clearly. Could you say it again, in English, Hindi or Hinglish?",
+    "hi": "माफ़ कीजिए, मैं इसे साफ़ नहीं समझ पाया। क्या आप इसे अंग्रेज़ी, हिंदी या हिंग्लिश में फिर से कह सकते हैं?",
+    "hinglish": "Sorry, मैं ये clearly नहीं समझ पाया। क्या आप इसे English, Hindi या Hinglish में फिर से कह सकते हैं?",
+}
 # Spoken when the same question has drawn several non-answers in a row; the engine then moves on.
 MOVE_ON = {
     "en": "Let's try another question.",
@@ -276,7 +290,8 @@ def fixed_phrases(language: str | None, *, essential_only: bool = False) -> list
         lines = [variants[0] for variants in refusals.values() if variants]
     else:
         lines = [text for variants in refusals.values() for text in variants]
-    lines += [MOVE_ON[lang], READY_TO_BEGIN[lang], CLOSING[lang], EARLY_END[lang]]
+    lines += [MOVE_ON[lang], READY_TO_BEGIN[lang], CLOSING[lang], EARLY_END[lang],
+              UNSUPPORTED_LANGUAGE[lang], DIDNT_CATCH_LANGUAGE[lang]]
     if not essential_only:
         lines += [SMALL_TALK_FOLLOWUP[lang], WELCOME_BACK[lang]]
     return list(dict.fromkeys(lines))
