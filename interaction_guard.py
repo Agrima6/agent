@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable
 
-from language_policy import looks_like_repetition_hallucination
+from language_policy import noise_reason
 
 
 class Intent(str, Enum):
@@ -44,6 +44,10 @@ class Intent(str, Enum):
     LANGUAGE_REQUEST = "language_request"
     # A request for a language the interview does not support, or a transcript in a script no supported language uses.
     UNSUPPORTED_LANGUAGE = "unsupported_language"
+    # "Are you there?", "Can you hear me?" - the candidate checking the connection, not answering anything.
+    PRESENCE_CHECK = "presence_check"
+    # "Give me a second", "let me think", "my internet is slow" - a request for time, not an answer.
+    NEED_TIME = "need_time"
 
 
 # Intents answered with a fixed refusal/redirect and never scored as an answer.
@@ -54,7 +58,8 @@ RESTRICTED_INTENTS = frozenset({
 })
 # Turns that are not an attempt to answer the current question (excluded from scoring).
 NON_ANSWER_INTENTS = RESTRICTED_INTENTS | {Intent.EMPTY, Intent.REPEAT, Intent.SKIP, Intent.END_INTERVIEW,
-                                           Intent.LANGUAGE_REQUEST, Intent.UNSUPPORTED_LANGUAGE}
+                                           Intent.LANGUAGE_REQUEST, Intent.UNSUPPORTED_LANGUAGE,
+                                           Intent.PRESENCE_CHECK, Intent.NEED_TIME}
 
 MAX_REQUEST_WORDS = 35
 MAX_CONTROL_WORDS = 20  # skip / end-interview phrases
@@ -238,6 +243,12 @@ _REPEAT = _p(
     r"\bi\s+(?:don'?t|do\s+not)\s+(?:understand|get)\s+(?:the|this|that|your|what\s+you)\b|\bdon'?t\s+know\s+what\s+you\s+mean\b",
     r"\b(?:can|could)\s+you\s+(?:please\s+)?(?:ask|say)\s+(?:that|it|the\s+question)\s+(?:again|differently|another\s+way)\b",
     r"\bask\s+(?:it|that|the\s+question)\s+(?:again|differently)\b",
+    # audio trouble on the candidate's side: the sensible reply is to say it again
+    r"\b(?:can't|cannot|couldn't|could\s+not|can\s+not|not\s+able\s+to)\s+hear\s+(?:you|that|anything|properly|clearly)\b",
+    r"\b(?:your\s+)?(?:voice|audio|sound)\s+(?:is\s+|was\s+)?(?:breaking|cutting|not\s+clear|unclear|low|choppy|lagging)\b",
+    r"\bspeak\s+(?:a\s+(?:little|bit)\s+)?(?:slower|slowly|louder|clearly|up)\b|\bslow\s+down\b",
+    r"आवाज़\s*(?:नहीं|साफ़\s*नहीं)\s*आ\s*रही|धीरे\s*(?:बोलिए|बोलो)|ज़ोर\s*से\s*(?:बोलिए|बोलो)",
+    r"\bawaaz\s+(?:nahi|saaf\s+nahi)\s+aa\s+rahi\b|\bdheere\s+bol", 
     r"(?:दोबारा|फिर\s*से|एक\s*बार\s*फिर|रिपीट)\s*(?:बोलिए|बोलो|बताइए|बताओ|कहिए|कीजिए|करो|कर\s*दीजिए|पूछिए)",
     r"(?:सुनाई|समझ)\s*नहीं\s*(?:आया|दिया|आई)",
     r"\bdobara\s+(?:bolo|boliye|batao|bataiye|poochho|puchiye)\b|\bphir\s+se\s+(?:bolo|boliye|batao|poochho|puchiye)\b",
@@ -256,6 +267,27 @@ _EXPLANATION = _p(
 
 # Whole-utterance "I don't know" answers. Anchored at the start, short, and rejected if the candidate
 # goes on to attempt an answer ("not sure, but maybe it uses hashing") - that is a partial answer.
+# Short utterances only (see classify): a long answer that happens to contain "let me think" is an answer.
+_PRESENCE = _p(
+    r"\bare\s+you\s+(?:still\s+)?(?:there|listening|here|with\s+me)\b",
+    r"\bcan\s+(?:you|u)\s+(?:hear|see)\s+me\b", r"\bcould\s+you\s+hear\s+me\b", r"\bcan\s+you\s+hear\b",
+    r"\bis\s+(?:anyone|anybody|someone)\s+(?:there|here)\b", r"\bam\s+i\s+(?:audible|visible|clear)\b",
+    r"^\W*(?:hello|hi|hey)\b[\W\s]*(?:(?:hello|hi|hey)\b[\W\s]*)+$",
+    r"(?:आप|आपको)\s*(?:मुझे\s*)?(?:सुन\s*(?:पा\s*रहे|रहे|सकते)|सुनाई)", r"सुनाई\s*दे\s*रहा", r"कोई\s*है\s*\??",
+    r"\bsunai\s+de\s+raha\b", r"\bkya\s+aap\s+(?:sun|hain)\b",
+)
+_NEED_TIME = _p(
+    r"\b(?:give|gimme)\s+me\s+(?:a\s+|one\s+)?(?:second|sec|moment|minute|min|bit|while|some\s+time)\b",
+    r"\b(?:just\s+)?(?:one|a)\s+(?:second|moment|minute|sec)\b", r"\bhold\s+on\b",
+    r"\bwait\s+(?:a\s+)?(?:second|moment|minute|please)\b", r"\b(?:let\s+me|lemme)\s+(?:think|see|recall|remember)\b",
+    r"\bcan\s+i\s+(?:take|have)\s+(?:a\s+)?(?:second|moment|minute|min|some\s+time)\b",
+    r"\bi\s+need\s+(?:a\s+)?(?:second|moment|minute|some\s+time|to\s+think)\b",
+    r"\bmy\s+(?:mic|microphone|internet|connection|wifi|network|audio|camera)\s+(?:is|isn't|is\s+not|has|keeps|was)\b",
+    r"(?:एक|थोड़ा)\s*(?:मिनट|सेकंड|रुकिए|समय)", r"रुकिए|रुको|सोचने\s*दीजिए",
+    r"\bek\s+(?:minute|second|min)\b", r"\bthoda\s+(?:time|ruk|sochne)\b", r"\bsochne\s+do\b", r"\bruk(?:o|iye|iyega)\b",
+)
+MAX_PRESENCE_WORDS = 9
+
 _DONT_KNOW = _p(
     r"^(?:(?:um+|uh+|well|honestly|sorry|actually|so)[,.\s]+)*(?:i\s+)?(?:really\s+|honestly\s+)?"
     r"(?:(?:don'?t|do\s+not)\s+know|have\s+no\s+idea|no\s+idea|(?:am|i'?m)\s+not\s+sure|not\s+sure|"
@@ -353,10 +385,16 @@ def classify(text: str, *, context: "Iterable[str] | None" = None) -> Classifica
     if words <= 3 and (_FILLER_ONLY.match(stripped) or stripped.lower() in _HALLUCINATIONS):
         return Classification(Intent.EMPTY, "filler")
 
-    if looks_like_repetition_hallucination(text):
-        return Classification(Intent.EMPTY, "repetition-hallucination")
+    noise = noise_reason(text)
+    if noise:
+        return Classification(Intent.EMPTY, noise)
 
     substantive = is_substantive_answer(text, context)
+    if words <= MAX_PRESENCE_WORDS and not substantive:
+        for presence_intent, presence_patterns in ((Intent.PRESENCE_CHECK, _PRESENCE), (Intent.NEED_TIME, _NEED_TIME)):
+            rule = _matches(presence_patterns, text)
+            if rule:
+                return Classification(presence_intent, rule)
     if any(p.search(text) for p in _INJECTION):
         if words <= MAX_REQUEST_WORDS and not substantive:
             return Classification(Intent.PROMPT_INJECTION, "injection")

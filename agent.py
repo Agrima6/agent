@@ -34,7 +34,7 @@ from config import (AGENT_NAME, AGENT_SERVICE_KEY, API_BASE_URL, ELEVENLABS_API_
                     ELEVENLABS_VOICE_ID_MALE, GROQ_API_KEY, AUTO_LANGUAGE,
                     OPENAI_API_KEY, SARVAM_API_KEY, TTS_PROVIDER, TTS_VOICE, VOICE_PROVIDER_FALLBACK)
 from edge_tts_plugin import EdgeTTS
-from language_policy import clean_transcript
+from language_policy import STT_VOCABULARY_HINT, clean_transcript, noise_reason
 from languages import LANGUAGE_CONFIGS, normalize_language
 import refusals
 import turn_trace
@@ -74,6 +74,7 @@ def _float_env(name: str, default: float) -> float:
 #   max_delay: the longest the detector will wait when the model thinks the thought is unfinished.
 # Both are adjustable per deployment: TURN_MIN_DELAY_S / TURN_MAX_DELAY_S. Lower them for snappier replies, raise them
 # for slower, more reflective speakers. The candidate can always end their answer at once with "Done speaking".
+USER_AWAY_TIMEOUT_S = _float_env("USER_AWAY_TIMEOUT_S", 25.0)
 TURN_MIN_DELAY_S = _float_env("TURN_MIN_DELAY_S", 2.0)
 TURN_MAX_DELAY_S = _float_env("TURN_MAX_DELAY_S", 6.0)
 
@@ -172,7 +173,10 @@ class InterviewerAgent(Agent):
         turn_trace.mark("turn_committed")
         # The caption shows the transcript without Arabic-script runs (Whisper's rendering of Hindi words); the full
         # original is what the conductor stores.
-        self._publish_line("candidate", clean_transcript(heard)[0] or heard)
+        # Recogniser noise (silence hallucinations, its own prompt echoed, a repeated word) is not shown as something the
+        # candidate said; it is still stored for the audit trail by the conductor.
+        if noise_reason(heard) is None:
+            self._publish_line("candidate", clean_transcript(heard)[0] or heard)
         await self.conductor.handle_candidate_turn(heard)
         raise StopResponse()  # every reply is produced by the conductor; never by a free-form LLM
 
@@ -190,8 +194,7 @@ class InterviewerAgent(Agent):
                         speech.action, speech.question_id)
 
 
-STT_VOCABULARY_HINT = ("Job interview with Arav from WorkmateIQ. Hindi, English, Hinglish, project, React, Python, Java, API, "
-                       "database, team, manager, experience.")
+# STT_VOCABULARY_HINT lives in language_policy (it must be known to the echo detector too).
 
 
 class VoiceProviderError(RuntimeError):
@@ -363,7 +366,16 @@ async def entrypoint(ctx: JobContext):
             stt=stt_engine,
             tts=tts_engine,
             turn_handling=make_turn_handling(),
+            # How long the candidate may say nothing before LiveKit reports them "away" (then the interviewer nudges
+            # once, gently). Long enough not to interrupt someone thinking through a hard question.
+            user_away_timeout=USER_AWAY_TIMEOUT_S,
         )
+
+        def on_user_state_for_nudge(event) -> None:
+            if event.new_state == "away":
+                asyncio.get_running_loop().create_task(interviewer.idle_nudge())
+
+        session.on("user_state_changed", on_user_state_for_nudge)
         attach_metrics_logging(session, interview_id, lambda: {
             "question": runner.state.question_id if runner.state else None, "phase": runner.phase})
         vad_opts = getattr(ctx.proc.userdata["vad"], "_opts", None)

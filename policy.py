@@ -250,6 +250,9 @@ class QuestionState:
     weak_threshold: float = 0.4
     depth_probe_enabled: bool = True
     non_answer_count: int = 0
+    noise_count: int = 0                 # unintelligible/echo turns: never counted toward skipping the question
+    judge_unrelated_softened: bool = False
+    idle_nudges: int = 0
     answer_parts: list[str] = field(default_factory=list)   # what the candidate said to this question so far
     asked_followups: list[str] = field(default_factory=list)
     focus: str = ""
