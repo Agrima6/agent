@@ -3,7 +3,7 @@ import os
 import re
 from pathlib import Path
 
-from focus import PRIORITIES, FocusArea, build_focus_areas, match_focus
+from focus import PRIORITIES, FocusArea, build_focus_areas, focus_for_question, match_focus
 from interaction_guard import contains_injection
 from llm_client import structured_json
 from roles import detect_role_type, is_plain_language_role
@@ -301,7 +301,7 @@ def apply_interview_intelligence(plan: dict, *, role_name: str, role_competencie
 
     for q in questions:
         if q.get("question_text") and not q.get("focus"):
-            area = match_focus(f"{q.get('topic', '')} {q['question_text']}", areas)
+            area = focus_for_question(q, areas)
             if area:
                 q["focus"], q["focus_priority"] = area.name, area.priority
 

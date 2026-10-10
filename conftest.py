@@ -15,3 +15,14 @@ def hermetic_embeddings(monkeypatch):
     embeddings.clear_cache()
     yield
     embeddings.clear_cache()
+
+
+@pytest.fixture(autouse=True)
+def hermetic_service_key(monkeypatch):
+    """The developer's .env may define AGENT_SERVICE_KEY (shared with the backend). Tests must not depend on it:
+    start every test with no key configured; tests that exercise authentication set one themselves."""
+    import api
+    import runner
+    monkeypatch.setattr(api, "AGENT_SERVICE_KEY", "")
+    monkeypatch.setattr(runner, "AGENT_SERVICE_KEY", "", raising=False)
+    monkeypatch.setattr(runner, "_AUTH_HEADERS", {}, raising=False)

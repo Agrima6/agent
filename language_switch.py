@@ -21,6 +21,7 @@ _ANY_LANG = "|".join(f"(?:{p})" for p in _LANGS.values())
 _REQUEST = re.compile(
     r"(?:"
     r"(?:can|could|would|will|may)\s+(?:you|we|u)\b[^.?!]*?(?:speak|talk|say|ask|reply|respond|continue|switch|change|do|conduct|take|go|use|explain)"
+    r"|(?:can|could|may|shall)\s+(?:i|we)\b[^.?!]{0,12}?(?:speak|talk|answer|reply|respond|continue|switch|go)\b"
     r"|(?:please|pls|plz|kindly)\b[^.?!]{0,30}?(?:" + _ANY_LANG + r")"
     r"|(?:" + _ANY_LANG + r")\b\s*(?:please|pls|plz|mein|me|men|main|mai|में|मे|bolo|boliye|bol|baat|chalega|chahiye|only|instead)"
     r"|(?:speak|talk|ask|reply|respond|continue|switch|change|convert|interview|conduct|go|use)\b[^.?!]{0,25}?\b(?:in|to|into|with)\b[^.?!]{0,8}?(?:" + _ANY_LANG + r")"

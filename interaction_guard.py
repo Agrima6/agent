@@ -18,6 +18,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from enum import Enum
+from typing import Iterable
 
 
 class Intent(str, Enum):
@@ -37,6 +38,8 @@ class Intent(str, Enum):
     PROMPT_INJECTION = "prompt_injection"
     # "I don't know": a genuine (non-)answer. Scored, but never pressed with a follow-up.
     DONT_KNOW = "dont_know"
+    # "Can I speak in Hindi?" - a request about the interview itself, never an answer to the question.
+    LANGUAGE_REQUEST = "language_request"
 
 
 # Intents answered with a fixed refusal/redirect and never scored as an answer.
@@ -46,7 +49,8 @@ RESTRICTED_INTENTS = frozenset({
     Intent.PROMPT_INJECTION,
 })
 # Turns that are not an attempt to answer the current question (excluded from scoring).
-NON_ANSWER_INTENTS = RESTRICTED_INTENTS | {Intent.EMPTY, Intent.REPEAT, Intent.SKIP, Intent.END_INTERVIEW}
+NON_ANSWER_INTENTS = RESTRICTED_INTENTS | {Intent.EMPTY, Intent.REPEAT, Intent.SKIP, Intent.END_INTERVIEW,
+                                           Intent.LANGUAGE_REQUEST}
 
 MAX_REQUEST_WORDS = 35
 MAX_CONTROL_WORDS = 20  # skip / end-interview phrases
@@ -69,11 +73,15 @@ _INJECTION = _p(
     r"\bdisregard\s+(?:all\s+|any\s+|the\s+|your\s+)*(?:previous\s+|prior\s+|above\s+|earlier\s+)?(?:instructions?|rules?|prompts?|guidelines?)",
     r"\bforget\s+(?:all\s+|everything\s+|that\s+|about\s+|your\s+|the\s+)*(?:previous\s+|prior\s+|these\s+)?(?:instructions?|rules?|prompt|this\s+is\s+an?\s+interview|you\s+are\s+an?\s+(?:ai\s+)?interviewer)",
     r"\b(?:reveal|show|print|repeat|tell|display|leak|share|give|read|output)\s+(?:me\s+)?(?:your\s+|the\s+)?(?:system\s+|hidden\s+|initial\s+|original\s+|secret\s+|internal\s+)(?:prompt|instructions?|rules|guidelines)",
-    r"\bsystem\s+prompt\b",
+    # Only a request AT the interviewer: "your system prompt" / "what is the system prompt". A candidate
+    # describing their own work ("I keep the system prompt in a config service") is an answer.
+    r"\byour\s+(?:system\s+|hidden\s+|secret\s+)?(?:prompt|instructions?)\b",
+    r"\bwhat\s+(?:is|are|'s)\s+(?:the\s+)?system\s+prompt\b|^\W*system\s+prompt\W*$",
     r"\bdeveloper\s+mode\b|\bjailbreak\b|\bdo\s+anything\s+now\b",
-    r"\byou\s+are\s+(?:now|no\s+longer)\b",
+    r"\byou\s+are\s+(?:now|no\s+longer)\s+(?:a|an|my|the|in|free|not|dan|unrestricted|allowed)\b",
     r"\bfrom\s+now\s+on,?\s+you\b",
-    r"\b(?:pretend|imagine)\s+(?:that\s+)?(?:you|this|we)\b",
+    # "imagine we have a million users" / "pretend the dependency is down" are normal engineering speech.
+    r"\b(?:pretend|imagine)\s+(?:that\s+)?you(?:'re|\s+are|\s+were|\s+have\s+no)\b",
     r"(?:^|[.!?]\s+|\bnow\s+|\byou\s+(?:must|should|will)\s+)(?:please\s+)?(?:act|behave|roleplay|role-play)\s+(?:as|like)\b",
     r"\bact\s+as\s+(?:a|an|my)\s+(?:tutor|teacher|assistant|chat\s?bot|friend|coach|mentor|hr|recruiter|expert|different)",
     r"\b(?:override|bypass|disable|turn\s+off)\s+(?:the\s+|your\s+)?(?:rules|restrictions|safety|guidelines|interview\s+mode|filters?)",
@@ -134,7 +142,7 @@ _PREVIOUS = _p(
 _UPCOMING = _p(
     r"\b(?:what|which)(?:'s|\s+is|\s+will|\s+would|\s+are)?\s+(?:the\s+|your\s+)?(?:next|upcoming|following|coming|remaining|other|later|final)\s+(?:questions?|topics?)\b",
     r"\bwhat\s+(?:will|would|are|do)\s+you\s+(?:going\s+to\s+|gonna\s+|plan\s+to\s+)?ask(?:\s+me)?(?:\s+next|\s+later)?\b",
-    r"\bwhat(?:'s|\s+is)\s+next\b",
+    r"^\W*(?:so\s+|ok(?:ay)?,?\s+)?what(?:'s|\s+is)\s+next\s*\??\W*$",
     r"\b(?:tell|show|give)\s+me\s+(?:the\s+|your\s+)?(?:next|upcoming|remaining|all|other)\s+questions?\b",
     r"\bhow\s+many\s+(?:more\s+)?questions?\b",
     r"\b(?:what|which)\s+topics?\s+(?:will|are|would)\s+(?:you|we|be|there)\b",
@@ -148,7 +156,7 @@ _EVALUATION = _p(
     r"\b(?:was|is)\s+(?:my|that|this|the)\s+(?:answer|response|reply)\s+(?:right|correct|wrong|incorrect|good|bad|ok|okay|fine|enough)\b",
     r"\b(?:is|was)\s+(?:that|this|it)\s+(?:right|correct|wrong|incorrect|good|ok|okay)\s*\??$",
     r"\bhow\s+(?:did|am|do)\s+i\s+(?:do|doing|perform|performing|score|fare)\b",
-    r"\b(?:what(?:'s|\s+is|\s+was)\s+)?my\s+(?:score|marks|rating|result|grade|performance|evaluation|feedback|status)\b",
+    r"^\W*(?:what(?:'s|\s+is|\s+was)\s+)?my\s+(?:score|marks|rating|result|grade|performance|evaluation|feedback|status)\b",
     r"\b(?:tell|give|show)\s+me\s+(?:my\s+)?(?:score|marks|rating|result|feedback|performance|grade)\b",
     r"\b(?:did|will|can)\s+i\s+(?:pass|fail|clear|qualify|get\s+(?:selected|the\s+job|hired))\b",
     r"\bam\s+i\s+(?:selected|hired|shortlisted|through|passing|failing|doing\s+(?:well|ok|okay|fine|good))\b",
@@ -202,18 +210,23 @@ _CHANGE_TOPIC = _p(
 )
 
 _UNRELATED = _p(
-    r"\b(?:weather|temperature|forecast|raining|rain\s+today)\b",
+    r"\bhow(?:'s|\s+is)\s+the\s+(?:weather|temperature)\b|\bwhat(?:'s|\s+is)\s+the\s+(?:weather|temperature)\b|\b(?:is\s+it|will\s+it)\s+rain",
     r"\b(?:tell|sing|play)\s+(?:me\s+)?(?:a\s+)?(?:joke|song|story|poem)\b|\bsing\s+(?:a\s+)?song\b",
-    r"\b(?:cricket|ipl|football|match\s+score|movie|film|bollywood)\b",
-    r"\b(?:stock\s+price|bitcoin|crypto\s+price|recipe|horoscope)\b",
+    r"^\W*(?:who|what|which|tell\s+me|did\s+you|have\s+you|do\s+you)\b.{0,40}\b(?:cricket|ipl|football|match\s+score|movie|film|bollywood)\b",
+    r"^\W*(?:what|whats|what's|tell\s+me|give\s+me|how)\b.{0,30}\b(?:stock\s+price|bitcoin|crypto\s+price|recipe|horoscope)\b",
     r"\bwhat\s+(?:time|day|date)\s+is\s+it\b|\bwho\s+(?:won|is\s+the\s+(?:prime\s+minister|president))\b",
     r"मौसम|चुटकुला|गाना\s*सुना|क्रिकेट|फिल्म",
     r"\bmausam\b|\bjoke\s+suna|\bgaana\s+suna",
 )
 
 _REPEAT = _p(
-    r"\b(?:repeat|rephrase|reword)\b(?!.{0,20}\b(?:previous|last|earlier|first|second|third)\b)",
-    r"\bsay\s+(?:that|it)\s+again\b|\bcome\s+again\b|\bonce\s+more\b|\bone\s+more\s+time\b|\bagain\s+please\b",
+    # A request ("repeat that", "please rephrase the question"), not the verb inside an answer ("we repeat the call").
+    r"^\W*(?:please\s+|can\s+you\s+|could\s+you\s+)?(?:repeat|rephrase|reword)\b(?!.{0,20}\b(?:previous|last|earlier|first|second|third)\b)",
+    r"\b(?:repeat|rephrase|reword)\s+(?:that|it|this|the\s+question|your\s+question|please|again)\b(?!.{0,20}\b(?:previous|last|earlier|first|second|third)\b)",
+    # "once more" inside an answer ("retry the failed ones once more") is not a request: only as one, or as the closer.
+    r"\bsay\s+(?:that|it)\s+again\b|\bcome\s+again\b"
+    r"|^\W*(?:(?:can|could)\s+you\s+)?(?:please\s+)?(?:say\s+(?:that|it)\s+)?(?:once\s+more|one\s+more\s+time)\b"
+    r"|\b(?:once\s+more|one\s+more\s+time|again)\s+please\W*$",
     r"^(?:pardon|sorry|what|huh|excuse\s+me)\s*[?.!]*$",
     r"\bi\s+(?:didn't|did\s+not|couldn't|could\s+not|missed|lost)\s+(?:catch|hear|get|understand|follow)\b",
     r"\b(?:didn't|did\s+not)\s+(?:catch|hear|get|understand)\s+(?:that|the\s+question|you|it)\b",
@@ -229,7 +242,7 @@ _REPEAT = _p(
 
 _EXPLANATION = _p(
     r"^(?:please\s+)?(?:can|could|would)\s+you\s+(?:please\s+)?(?:explain|teach|define|describe|elaborate\s+on|walk\s+me\s+through|help\s+me\s+understand)\s+(?!the\s+question\b)",
-    r"^(?:please\s+)?(?:explain|teach\s+me|define|describe)\s+(?!the\s+question\b)\S+",
+    r"^(?:please\s+)?(?:explain|teach\s+me|define|describe)\s+(?!the\s+question\b)\S+(?!.*\b(?:i|we)\s+(?:would|will|can|'d|use|used|have)\b)",
     r"\bwhat\s+does\s+.{1,40}\s+mean\b",
     r"^(?:what|whats|what's)\s+(?:is|are|does|do)\s+(?:a\s+|an\s+|the\s+)?[\w\-.+#/]+(?:\s+[\w\-.+#/]+){0,4}\s*\??$",
     r"\b(?:meaning|definition)\s+of\b",
@@ -295,7 +308,38 @@ def _matches(patterns: list[re.Pattern], text: str) -> str | None:
     return None
 
 
-def classify(text: str) -> Classification:
+# Wording that marks someone ANSWERING (describing what they would/did do), as opposed to asking the interviewer for
+# something. Used with overlap against the current question, never on its own.
+_ANSWER_CUES = re.compile(
+    r"\b(?:i|we)\s+(?:would|will|can|could|should|'d|'ll|use|used|have|had|am|was|were|do|did|need|first|then|also|usually|"
+    r"generally|typically|think|believe|built|build|designed|design|implemented|implement|handle|handled|check|checked|add|added)\b"
+    r"|\b(?:because|so\s+that|for\s+example|for\s+instance|in\s+order\s+to|which\s+means|that\s+way|as\s+a\s+result|"
+    r"first(?:ly)?|secondly|finally|then\s+(?:i|we)|after\s+that)\b",
+    re.I)
+MIN_SUBSTANTIVE_WORDS = 9
+
+
+def is_substantive_answer(text: str, context: "Iterable[str] | None") -> bool:
+    """True when the utterance reads as a genuine attempt at THIS question: long enough, phrased as an answer, and
+    sharing real vocabulary with the question, its topic and its expected topics. Pure lexical code - no LLM.
+
+    A request for a hint or the answer to the interviewer is short and has no overlap worth the name; a technical
+    answer that happens to contain "repeat", "my score" or "film" shares several concepts with the question.
+    """
+    if not context or word_count(text) < MIN_SUBSTANTIVE_WORDS:
+        return False
+    from topic_guard import stems          # local import: topic_guard is optional, lexical, and cheap
+    anchors = set()
+    for item in context:
+        anchors |= stems(str(item))
+    overlap = len(stems(text) & anchors)
+    cues = bool(_ANSWER_CUES.search(text))
+    return overlap >= 3 or (cues and overlap >= 1)
+
+
+def classify(text: str, *, context: "Iterable[str] | None" = None) -> Classification:
+    """What kind of turn is this? `context` (the current question's text/topic/expected topics) lets a substantive,
+    on-topic answer skip the request-style rules, which only make sense for short utterances aimed at the interviewer."""
     text = _normalize(text)
     words = word_count(text)
     stripped = text.strip(" .,!?;:-—")
@@ -305,11 +349,13 @@ def classify(text: str) -> Classification:
     if words <= 3 and (_FILLER_ONLY.match(stripped) or stripped.lower() in _HALLUCINATIONS):
         return Classification(Intent.EMPTY, "filler")
 
+    substantive = is_substantive_answer(text, context)
     if any(p.search(text) for p in _INJECTION):
-        if words <= MAX_REQUEST_WORDS:
+        if words <= MAX_REQUEST_WORDS and not substantive:
             return Classification(Intent.PROMPT_INJECTION, "injection")
-        # A long answer that happens to contain injection-like text: still evaluate it as an
-        # answer, but flag it so its raw text is never passed on to the composer.
+        # A long (or substantive, on-topic) answer that happens to contain injection-like text - e.g. a candidate
+        # explaining prompt-injection defences: still evaluate it as an answer, but flag it so its raw text is never
+        # passed on to the composer.
         return Classification(Intent.ANSWER, "injection-in-long-answer", suspicious=True)
 
     if words <= MAX_CONTROL_WORDS:
@@ -321,7 +367,7 @@ def classify(text: str) -> Classification:
         if rule:
             return Classification(Intent.SKIP, rule)
 
-    if words <= MAX_REQUEST_WORDS:
+    if words <= MAX_REQUEST_WORDS and not substantive:
         for intent, patterns in _RULES:
             rule = _matches(patterns, text)
             if rule:

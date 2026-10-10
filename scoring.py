@@ -1,3 +1,5 @@
+import os
+
 from llm_client import structured_json
 
 CONTENT_SCORE_SYSTEM_PROMPT = """You score a candidate's interview answer on content quality.
@@ -25,7 +27,17 @@ transcript (text only, no audio signals available). Do not penalize non-native E
 Hindi/Hinglish phrasing, or accent-related word choices — those are not observable in text
 and must not be inferred. Score only clarity, structure, and completeness.
 
+The text is speech-to-text output, so it can contain mis-heard words, wrong spellings, odd
+punctuation, and a mix of Hindi and English in one sentence. Those are transcription artifacts,
+NOT the candidate's mistakes: never lower a score for spelling, grammar, typos, missing
+punctuation, code-mixing, or a word that looks garbled (e.g. a misheard technical term). Judge
+only whether the ideas are organised, understandable in context, and complete.
+
 Return JSON: {"score": 0, "dimensions": {"clarity": 0, "structure": 0, "completeness": 0}, "explanation": "..."}
+
+SCALE: every number is an integer from 0 to 100 (NOT 0-10). Anchors: 85-100 clear, well organised and complete;
+60-84 understandable with minor gaps; 30-59 hard to follow or mostly incomplete; 0-29 a fragment, off-topic, or no
+real attempt. The "score" is your overall judgement of the three dimensions, on the same 0-100 scale.
 """
 
 
@@ -56,6 +68,11 @@ Return JSON:
   "recommendation": "strong_hire" | "hire" | "borderline" | "no_hire",
   "recommendation_reason": "1-2 sentences justifying the recommendation against the role's competency weights"
 }
+
+Every score is on a 0-100 scale. As a guide: 70+ is strong, 50-69 is adequate, below 50 is weak.
+Never describe a competency or answer below 50 as a strength. Only call something a strength when
+its score is 50 or more and the answer itself shows it. If an area has no score, it was not
+assessed - say it was not assessed rather than judging it.
 """
 
 
@@ -71,12 +88,104 @@ def generate_overall_summary(candidate_name: str, role_name: str, final_score: f
         }
         for q in question_reports
     ]
+    labelled = {k: f"{round(v)}/100 ({band(v)})" for k, v in competency_scores.items()}
     user_prompt = (
-        f"CANDIDATE: {candidate_name}\nROLE: {role_name}\nFINAL_SCORE: {final_score}\n"
-        f"COMPETENCY_SCORES: {competency_scores}\n"
+        f"CANDIDATE: {candidate_name}\nROLE: {role_name}\nFINAL_SCORE: {final_score}/100\n"
+        f"COMPETENCY_SCORES: {labelled}\n"
         f"PER_QUESTION_BREAKDOWN [UNTRUSTED]: {condensed}"
     )
-    return structured_json(OVERALL_SUMMARY_SYSTEM_PROMPT, user_prompt)
+    result = structured_json(OVERALL_SUMMARY_SYSTEM_PROMPT, user_prompt)
+    # The model is told the scale, but a strength that cites a weak competency is wrong whatever the model says.
+    result["key_strengths"] = drop_contradicted_strengths(result.get("key_strengths") or [], competency_scores)
+    return result
+
+
+STRONG_AT, ADEQUATE_AT = 70, 50
+
+
+def band(score: float) -> str:
+    return "strong" if score >= STRONG_AT else "adequate" if score >= ADEQUATE_AT else "weak"
+
+
+def drop_contradicted_strengths(strengths: list, competency_scores: dict) -> list:
+    """Remove any listed strength that names a competency the candidate scored below ADEQUATE_AT on."""
+    weak = [str(k).replace("_", " ").lower() for k, v in (competency_scores or {}).items()
+            if isinstance(v, (int, float)) and v < ADEQUATE_AT]
+    kept = []
+    for item in strengths:
+        text = str(item).lower().replace("_", " ")
+        if any(name in text for name in weak):
+            continue
+        kept.append(item)
+    return kept
+
+
+def minimum_answered() -> int:
+    try:
+        return max(1, int(os.getenv("MIN_ANSWERED_FOR_RECOMMENDATION") or 3))
+    except ValueError:
+        return 3
+
+
+def minimum_assessed_share() -> float:
+    try:
+        return float(os.getenv("MIN_ASSESSED_WEIGHT_SHARE") or 0.5)
+    except ValueError:
+        return 0.5
+
+
+EVALUATION_COMPLETE = "COMPLETE"
+EVALUATION_PARTIAL = "PARTIAL"
+EVALUATION_INSUFFICIENT = "INSUFFICIENT_EVIDENCE"
+
+
+def evaluation_status(*, answered: int, asked: int, assessed_share: float, unasked_high: list,
+                      ended_early: bool = False) -> dict:
+    """How much of the interview the evaluation actually rests on - a different question from whether the REPORT has
+    finished generating (Report.status: PENDING/PROCESSING/READY/FAILED) or whether the INTERVIEW has finished
+    (Interview.status). A READY report can describe an INSUFFICIENT_EVIDENCE evaluation.
+
+      COMPLETE               enough answered questions, enough of the role weight assessed, no high-priority gaps
+      PARTIAL                usable, but something was not asked/answered or the candidate ended early
+      INSUFFICIENT_EVIDENCE  below the minimum for a hiring recommendation (see guard_recommendation)
+    """
+    reasons = []
+    insufficient = False
+    if answered < minimum_answered():
+        reasons.append(f"only {answered} answered question(s) were scored (minimum {minimum_answered()})")
+        insufficient = True
+    if assessed_share < minimum_assessed_share():
+        reasons.append(f"only {round(assessed_share * 100)}% of the role's competency weight was assessed")
+        insufficient = True
+    if unasked_high:
+        reasons.append("high-priority areas were not asked or answered: " + ", ".join(unasked_high))
+    if asked > answered:
+        reasons.append(f"{asked - answered} question(s) were asked but not answered")
+    if ended_early:
+        reasons.append("the interview was ended early")
+    status = EVALUATION_INSUFFICIENT if insufficient else (EVALUATION_PARTIAL if reasons else EVALUATION_COMPLETE)
+    return {"status": status, "reasons": reasons, "answered_questions": answered, "asked_questions": asked,
+            "assessed_weight_share": assessed_share, "ended_early": ended_early}
+
+
+def guard_recommendation(overall: dict, *, answered: int, assessed_share: float, unasked_high: list) -> dict:
+    """A hire/no-hire call needs enough evidence. Below the thresholds the recommendation becomes
+    "insufficient_data" (deterministic code, never the model) and the report says why."""
+    if not overall:
+        return overall
+    problems = []
+    if answered < minimum_answered():
+        problems.append(f"only {answered} answered question(s) were scored (minimum {minimum_answered()})")
+    if assessed_share < minimum_assessed_share():
+        problems.append(f"only {round(assessed_share * 100)}% of the role's competency weight was assessed")
+    if unasked_high:
+        problems.append("high-priority areas were not asked: " + ", ".join(unasked_high))
+    if not problems:
+        return overall
+    return {**overall, "recommendation": "insufficient_data",
+            "recommendation_reason": "Not enough evidence for a hire/no-hire decision: " + "; ".join(problems) + ". "
+                                     "Consider completing or repeating the interview before deciding.",
+            "model_recommendation": overall.get("recommendation")}
 
 
 def aggregate_final_score(per_question_scores: list[dict], role_competencies: list[dict]) -> dict:
@@ -89,12 +198,17 @@ def aggregate_final_score(per_question_scores: list[dict], role_competencies: li
 
     competency_avg = {k: sum(v) / len(v) for k, v in comp_scores.items()}
 
+    # Normalise over the competencies that were actually assessed. Dividing by the full role weight
+    # silently scored every competency the interview never reached as 0 and dragged the final score
+    # down; how much was assessed is reported separately (assessed_weight_share) instead.
     total_weight = sum(c["weight"] for c in role_competencies) or 1.0
+    assessed_weight = sum(c["weight"] for c in role_competencies if c["key"] in competency_avg)
     final = 0.0
-    for c in role_competencies:
-        val = competency_avg.get(c["key"])
-        if val is None:
-            continue
-        final += (val * c["weight"]) / total_weight
+    if assessed_weight:
+        for c in role_competencies:
+            val = competency_avg.get(c["key"])
+            if val is not None:
+                final += val * c["weight"] / assessed_weight
 
-    return {"final_score": round(final, 1), "competency_scores": competency_avg}
+    return {"final_score": round(final, 1), "competency_scores": competency_avg,
+            "assessed_weight_share": round(assessed_weight / total_weight, 2)}

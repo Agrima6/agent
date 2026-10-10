@@ -203,11 +203,7 @@
     <div class="card thankyou-card">
       <div class="check">✓</div>
       <h2>Thank you, your interview is complete!</h2>
-      <p>We really appreciate the time you took today. Your results are ready below.</p>
-    </div>
-    <div class="card" id="reportCard">
-      <div class="report-status" id="reportStatus">Preparing your report…</div>
-      <div id="reportView"></div>
+      <p id="completionMessage">We really appreciate the time you took today. Your interview has been submitted and will be reviewed by the hiring team.</p>
     </div>
   </div>
 </div>
@@ -222,8 +218,7 @@ const transcriptEl = document.getElementById("transcript");
 const langOptions = document.getElementById("langOptions");
 const joinSection = document.getElementById("joinSection");
 const completeSection = document.getElementById("completeSection");
-const reportStatus = document.getElementById("reportStatus");
-const reportView = document.getElementById("reportView");
+const completionMessage = document.getElementById("completionMessage");
 
 // Show who/what this interview is for up front — makes it read as a real, structured
 // interview with a defined scope rather than an open-ended chat window.
@@ -233,7 +228,7 @@ const reportView = document.getElementById("reportView");
     const res = await fetch(`/v1/interviews/${interviewId}`);
     if (!res.ok) return;
     const data = await res.json();
-    const qCount = (data.plan?.questions || []).filter(q => q.question_text).length;
+    const qCount = data.question_count || 0;
     const metaEl = document.getElementById("interviewMeta");
     metaEl.innerHTML = `<b>${escapeHtml(data.role || "Interview")}</b><span class="sep"></span>${qCount} questions`;
     metaEl.style.display = "inline-flex";
@@ -327,100 +322,19 @@ function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-function scoreColor(score) {
-  if (score >= 75) return "#16a37a";
-  if (score >= 50) return "#e08b16";
-  return "#e0435a";
-}
-
-function listHtml(items, cls) {
-  if (!items || !items.length) return "";
-  return `<ul class="subtle-list ${cls}">${items.map(i => `<li>${escapeHtml(i)}</li>`).join("")}</ul>`;
-}
-
-function renderReport(data) {
-  const finalScore = Math.round(data.final_score || 0);
-  const color = scoreColor(finalScore);
-  const content = data.content || {};
-  const questions = content.questions || [];
-
-  let compRows = "";
-  for (const [key, val] of Object.entries(data.competency_scores || {})) {
-    const v = Math.round(val);
-    compRows += `
-      <div class="comp-row">
-        <div class="top"><span class="key">${key.replace(/_/g, " ")}</span><span>${v}/100</span></div>
-        <div class="bar-track"><div class="bar-fill" style="width:${v}%;background:${scoreColor(v)}"></div></div>
-      </div>`;
-  }
-
-  let qCards = "";
-  for (const q of questions) {
-    const cScore = Math.round(q.content_score?.score ?? 0);
-    const dims = q.content_score?.dimensions || {};
-    const dimPills = Object.entries(dims).map(([k, v]) => `<span class="dim-pill">${k.replace(/_/g, " ")}: ${Math.round(v)}</span>`).join("");
-    qCards += `
-      <div class="q-card">
-        <div class="q-header">
-          <div class="q-text">${escapeHtml(q.question)}</div>
-          <div class="q-score" style="background:${scoreColor(cScore)}22;color:${scoreColor(cScore)}">${cScore}/100</div>
-        </div>
-        <div class="answer">${escapeHtml(q.candidate_answer)}</div>
-        <div class="dims">${dimPills}</div>
-        ${q.content_score?.explanation ? `<div class="explain">"${escapeHtml(q.content_score.explanation)}"</div>` : ""}
-        ${q.content_score?.strengths?.length ? `<div class="subtle-label">Strengths</div>${listHtml(q.content_score.strengths, "good")}` : ""}
-        ${q.content_score?.improvement_areas?.length ? `<div class="subtle-label">Could improve</div>${listHtml(q.content_score.improvement_areas, "bad")}` : ""}
-      </div>`;
-  }
-
-  const overall = content.overall || {};
-  const recColors = { strong_hire: "#056a4f", hire: "#166534", borderline: "#92400e", no_hire: "#a2263a" };
-  const recLabels = { strong_hire: "Strong Hire", hire: "Hire", borderline: "Borderline", no_hire: "No Hire" };
-  const recColor = recColors[overall.recommendation] || "#374151";
-  const overallHtml = overall.summary ? `
-    <div class="overall-card">
-      ${overall.recommendation ? `<div class="rec-badge" style="background:${recColor}22;color:${recColor}">${recLabels[overall.recommendation] || overall.recommendation}</div>` : ""}
-      <div class="summary-text">${escapeHtml(overall.summary)}</div>
-      ${overall.recommendation_reason ? `<div class="rec-reason">${escapeHtml(overall.recommendation_reason)}</div>` : ""}
-      <div class="kg-grid">
-        <div class="kg-col"><h4 style="color:#056a4f;">Key strengths</h4>${listHtml(overall.key_strengths, "good")}</div>
-        <div class="kg-col"><h4 style="color:#a2263a;">Key gaps</h4>${listHtml(overall.key_gaps, "bad")}</div>
-      </div>
-    </div>` : "";
-
-  reportView.innerHTML = `
-    <div class="score-hero">
-      <div class="score-ring" style="background:${color}">${finalScore}</div>
-      <div class="meta">
-        <div>${escapeHtml(content.candidate || "You")} — ${escapeHtml(content.role || "")}</div>
-        <div>Overall score out of 100</div>
-      </div>
-    </div>
-    ${overallHtml}
-    ${compRows}
-    <div class="section-title">Per-question breakdown</div>
-    ${qCards || '<div class="report-status">No scored answers yet.</div>'}
-  `;
-}
-
-async function showCompletionAndReport() {
+// What a candidate sees when the interview ends: that it was submitted. Evaluation output (scores, the hiring
+// verdict, strengths/gaps, per-question analysis) is HR-only and is never requested or rendered by this page.
+async function showCompletion() {
   joinSection.style.display = "none";
   completeSection.style.display = "block";
   window.scrollTo({ top: 0, behavior: "smooth" });
-
-  for (let attempt = 0; attempt < 20; attempt++) {
-    try {
-      const res = await fetch(`/v1/interviews/${interviewId}/report`);
-      if (res.ok) {
-        const data = await res.json();
-        reportStatus.style.display = "none";
-        renderReport(data);
-        return;
-      }
-    } catch (e) { /* keep trying */ }
-    await new Promise(r => setTimeout(r, 3000));
-  }
-  reportStatus.textContent = "Your report is still being prepared — check back with HR shortly.";
+  try {
+    const res = await fetch(`/v1/interviews/${interviewId}/completion`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.message) completionMessage.textContent = data.message;
+    }
+  } catch (e) { /* the static thank-you message is enough */ }
 }
 
 let pollTimer = null;
@@ -431,7 +345,7 @@ function pollStatus() {
       const data = await res.json();
       if (data.status === "completed") {
         clearInterval(pollTimer);
-        showCompletionAndReport();
+        showCompletion();
       }
     } catch (e) { /* keep polling */ }
   }, 3000);
@@ -508,7 +422,7 @@ joinBtn.onclick = async () => {
 
     room.on(LivekitClient.RoomEvent.Disconnected, () => {
       setStatus("Interview session ended.");
-      showCompletionAndReport();
+      showCompletion();
     });
 
     await room.connect(url, token);

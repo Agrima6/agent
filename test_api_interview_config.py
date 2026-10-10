@@ -153,7 +153,7 @@ def test_interview_configuration_round_trips(client, role_and_candidate):
     r = create(client, role_id, cand_id, max_followups_per_question=1, coverage_threshold=0.6,
                depth_probe_enabled="false", experience_level="3-5 years", voice_gender="male", voice_pace=0.9)
     assert r.status_code == 200
-    got = client.get(f"/v1/interviews/{r.json()['id']}").json()
+    got = client.get(f"/v1/interviews/{r.json()['id']}/agent-context").json()
     assert got["max_followups_per_question"] == 1 and got["coverage_threshold"] == 0.6
     assert got["depth_probe_enabled"] is False and got["experience_level"] == "3-5 years"
     assert got["voice"] == {"gender": "male", "speaker": None, "pace": 0.9}
@@ -170,7 +170,7 @@ def test_invalid_configuration_is_rejected(client, role_and_candidate, extra):
 
 def test_defaults_apply_when_nothing_is_configured(client, role_and_candidate):
     role_id, cand_id = role_and_candidate
-    got = client.get(f"/v1/interviews/{create(client, role_id, cand_id).json()['id']}").json()
+    got = client.get(f"/v1/interviews/{create(client, role_id, cand_id).json()['id']}/agent-context").json()
     assert got["max_followups_per_question"] == 2 and got["coverage_threshold"] == 0.7
     assert got["depth_probe_enabled"] is True and got["voice"] == {"gender": None, "speaker": None, "pace": None}
 
@@ -198,7 +198,7 @@ def test_progress_only_moves_forward(client, role_and_candidate):
     iid = _interview(client, role_and_candidate)
     ok = client.post(f"/v1/interviews/{iid}/progress", data={"question_index": 2, "followup_count": 1, "small_talk_done": 2, "phase": "follow_up"})
     assert ok.json()["accepted"] is True
-    assert client.get(f"/v1/interviews/{iid}").json()["progress"] == {
+    assert client.get(f"/v1/interviews/{iid}/agent-context").json()["progress"] == {
         "question_index": 2, "followup_count": 1, "small_talk_done": 2, "phase": "follow_up"}
     stale = client.post(f"/v1/interviews/{iid}/progress", data={"question_index": 1, "followup_count": 0, "small_talk_done": 2})
     assert stale.json()["accepted"] is False
@@ -370,7 +370,8 @@ def test_hr_focus_areas_shape_the_plan_and_are_stored_with_it(client, role_and_c
     role_id, cand_id = role_and_candidate
     r = create(client, role_id, cand_id, focus_areas=json.dumps(FOCUS))
     assert r.status_code == 200
-    plan = r.json()["plan"]
+    assert "focus_areas" not in r.json()["plan"]            # scoring configuration is not in the create response
+    plan = client.get(f"/v1/interviews/{r.json()['id']}/agent-context").json()["plan"]   # stored with the interview
     areas = {a["name"]: a for a in plan["focus_areas"]}
     assert areas["Production debugging"]["priority"] == "HIGH" and areas["Communication"]["priority"] == "LOW"
     assert any(q.get("focus") == "Production debugging" for q in plan["questions"])      # HIGH area is always asked

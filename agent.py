@@ -29,7 +29,7 @@ from livekit.plugins import openai as lk_openai
 from livekit.plugins import silero
 
 from conductor import InterviewConductor, Speech
-from config import (AGENT_NAME, API_BASE_URL, ELEVENLABS_API_KEY, ELEVENLABS_MODEL, ELEVENLABS_VOICE_ID, ELEVENLABS_VOICE_ID_FEMALE,
+from config import (AGENT_NAME, AGENT_SERVICE_KEY, API_BASE_URL, ELEVENLABS_API_KEY, ELEVENLABS_MODEL, ELEVENLABS_VOICE_ID, ELEVENLABS_VOICE_ID_FEMALE,
                     ELEVENLABS_VOICE_ID_MALE, GROQ_API_KEY, AUTO_LANGUAGE,
                     OPENAI_API_KEY, SARVAM_API_KEY, TTS_PROVIDER, TTS_VOICE, VOICE_PROVIDER_FALLBACK)
 from edge_tts_plugin import EdgeTTS
@@ -54,14 +54,29 @@ CANDIDATE_SETTLE_S = float(os.getenv("CANDIDATE_SETTLE_S") or 1.2)  # let their 
 # Never sent to an LLM (the session has none). LiveKit's Agent requires the field.
 _AGENT_DESCRIPTION = "Controlled interview conductor: every spoken turn is produced and validated by the interview engine."
 
-# Turn handling. LiveKit's defaults are used except where an interview clearly needs different
-# behaviour: a candidate thinking mid-answer pauses far longer than a casual speaker, so the
-# maximum wait for a turn the end-of-turn model judges unfinished is raised from 3s to 5s (the
-# minimum delay stays 0.5s, so normal turns are not slowed). Interruptions (barge-in) stay enabled
-# with LiveKit's adaptive detection. Preemptive generation is off: nothing here generates
-# speech speculatively from partial transcripts.
+# Turn handling. LiveKit's defaults are used except where an interview clearly needs different behaviour: a candidate
+# thinking mid-answer pauses far longer than a casual speaker (see TURN_MIN_DELAY_S / TURN_MAX_DELAY_S below).
+# Interruptions (barge-in) stay enabled with LiveKit's adaptive detection. Preemptive generation is off: nothing here
+# generates speech speculatively from partial transcripts.
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name) or default)
+    except ValueError:
+        return default
+
+
+# How long the candidate may stay silent before their answer is treated as finished.
+#   min_delay: silence required even when the end-of-turn model believes the sentence is complete. 0.4 s (the old
+#              value) committed a turn after almost any sentence end, so a candidate who finished a sentence and then
+#              thought for 1-2 s was cut off and the next fragment was answered separately.
+#   max_delay: the longest the detector will wait when the model thinks the thought is unfinished.
+# Both are adjustable per deployment: TURN_MIN_DELAY_S / TURN_MAX_DELAY_S. Lower them for snappier replies, raise them
+# for slower, more reflective speakers. The candidate can always end their answer at once with "Done speaking".
+TURN_MIN_DELAY_S = _float_env("TURN_MIN_DELAY_S", 2.0)
+TURN_MAX_DELAY_S = _float_env("TURN_MAX_DELAY_S", 6.0)
+
 TURN_HANDLING = {
-    "endpointing": {"min_delay": 0.4, "max_delay": 3.0},
+    "endpointing": {"min_delay": TURN_MIN_DELAY_S, "max_delay": max(TURN_MAX_DELAY_S, TURN_MIN_DELAY_S)},
     "interruption": {"enabled": True},
     "preemptive_generation": {"enabled": False},
 }
@@ -167,7 +182,8 @@ class InterviewerAgent(Agent):
         handle = self.session.say(text, allow_interruptions=speech.interruptible, add_to_chat_ctx=False)
         await handle  # returns when playout finishes or the candidate barges in
         if handle.interrupted:
-            logger.info("barge-in during action=%s question=%s", speech.action, speech.question_id)
+            logger.info("event=interruption interview=%s action=%s question=%s", self.runner.interview_id,
+                        speech.action, speech.question_id)
 
 
 STT_VOCABULARY_HINT = ("Job interview with Arav from WorkmateIQ. Hindi, English, Hinglish, project, React, Python, Java, API, "
@@ -223,7 +239,10 @@ async def entrypoint(ctx: JobContext):
 
     interview_id = ctx.room.name.replace("interview-", "")
     async with httpx.AsyncClient(timeout=15.0) as http:
-        resp = await http.get(f"{API_BASE_URL}/v1/interviews/{interview_id}")
+        # The full plan (question rubrics, expected topics...) is served only to this service, over the
+        # authenticated agent-context endpoint. The public interview endpoint no longer carries it.
+        resp = await http.get(f"{API_BASE_URL}/v1/interviews/{interview_id}/agent-context",
+                              headers={"X-Agent-Key": AGENT_SERVICE_KEY} if AGENT_SERVICE_KEY else {})
         resp.raise_for_status()
         data = resp.json()
 

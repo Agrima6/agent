@@ -52,8 +52,32 @@ def _confidence(evals: list[dict], answered: int) -> str:
     return "HIGH" if len(usable) >= 2 else "MEDIUM"
 
 
-def build_intelligence(plan: dict, question_reports: list[dict], coverage_rows: list[dict]) -> dict:
-    """`coverage_rows`: the persisted per-answer records, each {question_id, followup_count, evaluation}."""
+def _norm(name: str) -> str:
+    return " ".join(str(name or "").replace("_", " ").lower().split())
+
+
+INTRO_TYPES = ("introduction", "candidate_introduction")
+
+
+def serves_focus(question: dict, area_name: str) -> bool:
+    """A question counts toward a focus area when it was tagged with it OR declares the matching competency.
+
+    The tag is free-text overlap chosen at plan time and is missing on dynamic/resume questions (and on plans stored
+    before tagging existed); the competency list is always present. Using only the tag made a fully answered
+    Problem Solving question read as NOT_ASKED.
+    """
+    if question.get("type") in INTRO_TYPES:
+        return False
+    if question.get("focus") == area_name:
+        return True
+    return _norm(area_name) in {_norm(c) for c in (question.get("competencies") or [])}
+
+
+def build_intelligence(plan: dict, question_reports: list[dict], coverage_rows: list[dict],
+                       asked_ids: set | None = None) -> dict:
+    """`coverage_rows`: the persisted per-answer records, each {question_id, followup_count, evaluation}.
+    `asked_ids`: ids of questions the interviewer actually put to the candidate (planned is not asked). When absent
+    (older callers) every answered question counts as asked."""
     questions = [q for q in (plan or {}).get("questions", []) if q.get("question_text")]
     reports = {r["question_id"]: r for r in question_reports}
     rows = _by_question(coverage_rows)
@@ -67,11 +91,12 @@ def build_intelligence(plan: dict, question_reports: list[dict], coverage_rows: 
     focus_coverage = []
     for raw in (plan or {}).get("focus_areas") or []:
         area = FocusArea.from_dict(raw)
-        related = [q for q in questions if q.get("focus") == area.name]
-        answered = [q for q in related if q["id"] in reports]
+        related = [q for q in questions if serves_focus(q, area.name)]
+        asked_here = [q for q in related if asked_ids is None or q["id"] in asked_ids or q["id"] in reports]
+        answered = [q for q in related if q["id"] in reports and reports[q["id"]].get("answered", True)]
         evals = [e for q in answered for e in evaluations(q["id"])]
         score = _mean([s for q in answered if (s := _score(reports[q["id"]])) is not None])
-        if not related:
+        if not asked_here:
             status = "NOT_ASKED"
         elif not answered:
             status = "NOT_ANSWERED"
@@ -79,7 +104,7 @@ def build_intelligence(plan: dict, question_reports: list[dict], coverage_rows: 
             status = "COVERED" if score is not None and score >= _covered_score() else "PARTIAL"
         focus_coverage.append({
             "focus": area.name, "priority": area.priority, "sources": area.sources, "status": status, "score": score,
-            "questions_asked": len(related), "questions_answered": len(answered),
+            "questions_planned": len(related), "questions_asked": len(asked_here), "questions_answered": len(answered),
             "follow_up_depth": sum(depth(q["id"]) for q in answered),
             "evidence": [e for ev in evals for e in (ev.get("evidence") or [])][:5],
             "confidence": _confidence(evals, len(answered)),

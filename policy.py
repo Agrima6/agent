@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 
-from interaction_guard import Intent, contains_injection, word_count
+from interaction_guard import Intent, contains_injection, is_substantive_answer, word_count
 from llm_provider import LLMError, get_provider, role_model
 from topic_guard import ground_concepts
 
@@ -217,7 +217,7 @@ def judge_answer(question_text: str, expected_topics: list[str], candidate_answe
     return evaluation
 
 
-def restricted_intent_from_judge(evaluation: Evaluation, answer_text: str) -> Intent | None:
+def restricted_intent_from_judge(evaluation: Evaluation, answer_text: str, context=None) -> Intent | None:
     """A second line of defence behind interaction_guard for phrasings the regexes miss (e.g. a
     paraphrased hint request in Hinglish). Deliberately conservative: an on-topic answer is never
     reclassified, and 'off_topic' additionally requires very low relevance, so a weak or wrong
@@ -227,7 +227,13 @@ def restricted_intent_from_judge(evaluation: Evaluation, answer_text: str) -> In
         return None
     if mapped == Intent.UNRELATED and evaluation.relevance > 20:
         return None
-    if mapped != Intent.PROMPT_INJECTION and word_count(answer_text) > 35:
+    # Length cap for EVERY intent. It used to exempt prompt_injection, so a long, relevant answer about a security
+    # topic could be refused with "Let's stay focused on the interview" just because the judge said so.
+    if word_count(answer_text) > 35:
+        return None
+    # An answer that is phrased like an answer AND shares the question's vocabulary is never refused on the
+    # model's say-so alone. (A genuinely off-topic or injected message has no such overlap.)
+    if context and is_substantive_answer(answer_text, context):
         return None
     return mapped
 
@@ -244,6 +250,7 @@ class QuestionState:
     weak_threshold: float = 0.4
     depth_probe_enabled: bool = True
     non_answer_count: int = 0
+    answer_parts: list[str] = field(default_factory=list)   # what the candidate said to this question so far
     asked_followups: list[str] = field(default_factory=list)
     focus: str = ""
     focus_priority: str = ""

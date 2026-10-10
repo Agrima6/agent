@@ -239,9 +239,11 @@ async def test_the_session_has_no_conversational_llm_so_free_form_speech_is_impo
     await client.aclose()
 
 
-def test_turn_handling_gives_candidates_longer_thinking_pauses_without_slowing_normal_turns():
-    assert TURN_HANDLING["endpointing"]["min_delay"] == 0.4          # responsive: replies within ~4s overall
-    assert TURN_HANDLING["endpointing"]["max_delay"] == 3.0          # LiveKit default: bounds the wait on an unfinished turn
+def test_turn_handling_tolerates_a_one_to_two_second_thinking_pause():
+    # A turn must not be committed while the candidate is still thinking: the silence required even after a sentence
+    # that sounds finished has to cover a 1-2 s pause, and the unfinished-thought wait has to be longer still.
+    assert TURN_HANDLING["endpointing"]["min_delay"] >= 1.5
+    assert TURN_HANDLING["endpointing"]["max_delay"] >= TURN_HANDLING["endpointing"]["min_delay"]
     assert TURN_HANDLING["interruption"]["enabled"] is True          # barge-in stays on
     assert TURN_HANDLING["preemptive_generation"]["enabled"] is False
 

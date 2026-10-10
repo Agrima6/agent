@@ -52,7 +52,7 @@ def test_checkpoint_api_the_platform_payload_survives_validation_and_planning(cl
 def test_checkpoint_api_the_question_is_stored_with_the_interview_and_returned_on_reload(client, role_and_candidate):
     role_id, cand_id = role_and_candidate
     created = create(client, role_id, cand_id, questions_json=json.dumps(PLATFORM_PAYLOAD)).json()
-    reloaded = client.get(f"/v1/interviews/{created['id']}").json()                          # what the worker loads
+    reloaded = client.get(f"/v1/interviews/{created['id']}/agent-context").json()                          # what the worker loads
     assert any(MARK in (q.get("question_text") or "") for q in reloaded["plan"]["questions"])
 
 

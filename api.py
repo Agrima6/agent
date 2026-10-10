@@ -1,4 +1,6 @@
 import asyncio
+import datetime
+import hmac
 import json
 import logging
 import os
@@ -31,7 +33,9 @@ import voice_settings
 from focus import build_focus_areas
 from intelligence_report import build_intelligence
 from planner import build_interview_plan, generate_dynamic_questions, warm_question_bank_embeddings
-from scoring import score_answer_content, score_communication, aggregate_final_score, generate_overall_summary
+from scoring import (score_answer_content, score_communication, aggregate_final_score, generate_overall_summary,
+                     guard_recommendation, evaluation_status)
+from evaluation import collect_question_results, ended_early
 from roles import competencies_for_role, detect_role_type
 from interaction_guard import NON_ANSWER_INTENTS
 from voice_config import VALID_V3_SPEAKERS, clamp_pace, resolve_voice
@@ -39,6 +43,30 @@ from voice_config import VALID_V3_SPEAKERS, clamp_pace, resolve_voice
 init_db()
 app = FastAPI(title="Workmate.IQ Interview Agent (MVP)")
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+def _is_production() -> bool:
+    """APP_ENV=production, or a PaaS that announces itself (Render sets RENDER=true)."""
+    return (os.getenv("APP_ENV", "").lower() == "production") or bool(os.getenv("RENDER"))
+
+
+if _is_production() and not AGENT_SERVICE_KEY:
+    # Without the key every privileged endpoint (agent context, report, transcript, token minting) is open to anyone
+    # who knows an interview id. Refuse to start rather than run that way.
+    raise RuntimeError("AGENT_SERVICE_KEY must be set when running in production (APP_ENV=production / RENDER).")
+if not AGENT_SERVICE_KEY:
+    logger.warning("AGENT_SERVICE_KEY is not set: privileged endpoints are OPEN. Acceptable on localhost only.")
+
+
+# Plan fields that exist for the interviewer and the evaluator. They must never reach a candidate's browser: the
+# expected topics are the answer key, and the focus/competency tags reveal how the answer will be scored.
+_CANDIDATE_VISIBLE_QUESTION_FIELDS = ("id", "type", "question_text", "topic", "time_limit")
+
+
+def public_plan(plan: dict | None) -> dict:
+    """The plan as a candidate-safe / listing-safe value: ids, kinds, wording, time limit. No rubric data."""
+    return {"questions": [{k: q[k] for k in _CANDIDATE_VISIBLE_QUESTION_FIELDS if k in q}
+                          for q in (plan or {}).get("questions", [])]}
 
 
 def require_service_key(x_agent_key: str | None = Header(default=None)):
@@ -52,7 +80,7 @@ def require_service_key(x_agent_key: str | None = Header(default=None)):
     """
     if not AGENT_SERVICE_KEY:
         return
-    if x_agent_key != AGENT_SERVICE_KEY:
+    if not x_agent_key or not hmac.compare_digest(x_agent_key, AGENT_SERVICE_KEY):
         raise HTTPException(401, "missing or invalid X-Agent-Key")
 
 _agent_process: subprocess.Popen | None = None
@@ -284,14 +312,52 @@ def create_interview(candidate_id: str = Form(...), role_id: str = Form(...),
     interview.room_name = f"interview-{interview.id}"
     db.commit()
     transition_interview(db, interview, states.PLANNED, reason="plan generated")
-    return {"id": interview.id, "room_name": interview.room_name, "plan": plan}
+    # The caller gets the questions' wording, not their rubrics. The full plan stays server-side and is read by the
+    # voice agent through /agent-context (service key).
+    return {"id": interview.id, "room_name": interview.room_name, "plan": public_plan(plan)}
+
+
+def _status_label(status: str) -> str:
+    return "completed" if states.is_terminal(status) or status in (states.FINALIZING, states.COMPLETED) else status.lower()
+
+
+def _service_authorised(x_agent_key: str | None) -> bool:
+    """True only when a service key is configured AND the caller presented it."""
+    return bool(AGENT_SERVICE_KEY and x_agent_key and hmac.compare_digest(x_agent_key, AGENT_SERVICE_KEY))
 
 
 @app.get("/v1/interviews/{interview_id}")
-def get_interview(interview_id: str, db: Session = Depends(get_db)):
+def get_interview(interview_id: str, x_agent_key: str | None = Header(default=None), db: Session = Depends(get_db)):
+    """Same URL, two views, chosen by credentials:
+
+      * a caller presenting the service key (the HR/candidate-portal backend, the voice agent) gets the full internal
+        view, exactly as before - the backend resumes interviews from `plan` and `status`;
+      * anyone else (a candidate's browser) gets only that the interview exists, what it is for and where it stands.
+        No plan, rubric, scoring configuration or voice/provider internals.
+    """
     interview = db.get(Interview, interview_id)
     if not interview:
         raise HTTPException(404, "not found")
+    if _service_authorised(x_agent_key):
+        return _agent_view(interview)
+    return {
+        "id": interview.id, "status": _status_label(interview.status),
+        "role": interview.role.name, "language": interview.language,
+        "duration_minutes": interview.duration_minutes,
+        "question_count": sum(1 for q in public_plan(interview.plan)["questions"] if q.get("question_text")),
+    }
+
+
+@app.get("/v1/interviews/{interview_id}/agent-context", dependencies=[Depends(require_service_key)])
+def get_agent_context(interview_id: str, db: Session = Depends(get_db)):
+    """The voice agent's full view of the interview, including the question plan. Service-to-service only."""
+    interview = db.get(Interview, interview_id)
+    if not interview:
+        raise HTTPException(404, "not found")
+    return _agent_view(interview)
+
+
+def _agent_view(interview) -> dict:
     return {
         "id": interview.id, "status": interview.status, "room_name": interview.room_name,
         "plan": interview.plan, "candidate": interview.candidate.name, "role": interview.role.name,
@@ -375,13 +441,23 @@ def record_tts_metadata(interview_id: str, metadata: str = Form(...), db: Sessio
     return {"ok": True}
 
 
+_PRE_START_STATES = (states.CREATED, states.PLANNED, states.READY)
+TURN_DEDUPE_SECONDS = float(os.getenv("TURN_DEDUPE_SECONDS") or 4.0)
+
+
 @app.post("/v1/interviews/{interview_id}/language")
-def set_interview_language(interview_id: str, language: str = Form(...), db: Session = Depends(get_db)):
+def set_interview_language(interview_id: str, language: str = Form(...), x_agent_key: str | None = Header(default=None),
+                           db: Session = Depends(get_db)):
+    """A candidate picks their language on the join screen, before the interview begins. Once it is under way (or
+    over) only the interviewer service may change it - an open endpoint here let anyone holding an interview id
+    rewrite the language of a live session."""
     if language not in SUPPORTED_LANGUAGES:
         raise HTTPException(422, f"language must be one of {sorted(SUPPORTED_LANGUAGES)}")
     interview = db.get(Interview, interview_id)
     if not interview:
         raise HTTPException(404, "not found")
+    if interview.status not in _PRE_START_STATES:
+        require_service_key(x_agent_key)
     interview.language = language
     db.commit()
     return {"id": interview.id, "language": interview.language}
@@ -491,6 +567,15 @@ def record_turn(interview_id: str, question_id: str = Form(...), question_text: 
         # Generation-fence enforcement (plan §2): a turn from a stale in-flight call must never
         # be persisted once the interview has ended.
         raise HTTPException(409, "INTERVIEW_ALREADY_COMPLETED")
+    # Idempotent: the same line from the same speaker for the same question, a moment after the first write, is a retry
+    # or a duplicated event - not a second turn. (A real repeat of an identical sentence is seconds apart or more.)
+    previous = (db.query(InterviewTurn)
+                .filter(InterviewTurn.interview_id == interview_id, InterviewTurn.question_id == question_id,
+                        InterviewTurn.speaker == speaker)
+                .order_by(InterviewTurn.started_at.desc()).first())
+    if previous is not None and previous.text == text and previous.started_at and \
+            (datetime.datetime.utcnow() - previous.started_at).total_seconds() <= TURN_DEDUPE_SECONDS:
+        return {"id": previous.id, "duplicate": True}
     turn = InterviewTurn(interview_id=interview_id, question_id=question_id, question_text=question_text,
                          speaker=speaker, text=text, is_followup=int(is_followup),
                          intent=(intent[:40] or None), action=(action[:40] or None))
@@ -606,32 +691,15 @@ def _run_scoring_job(interview_id: str, report_id: str):
         db.commit()
 
         turns = db.query(InterviewTurn).filter(InterviewTurn.interview_id == interview_id).order_by(InterviewTurn.started_at).all()
-        questions_by_id = {q["id"]: q for q in interview.plan["questions"] if q.get("question_text")}
-
-        per_question_scores = []
-        question_reports = []
-        for qid, q in questions_by_id.items():
-            # Turns that were not an attempt to answer (hint/answer requests, prompt-injection,
-            # repeat requests, skips ...) are kept in the transcript but never scored as answers.
-            candidate_text = "\n".join(
-                t.text for t in turns
-                if t.question_id == qid and t.speaker == "candidate"
-                and (t.intent or "answer") not in {i.value for i in NON_ANSWER_INTENTS}
-            )
-            if not candidate_text.strip():
-                continue
-            content = score_answer_content(q["question_text"], q.get("expected_topics", []), candidate_text)
-            comm = score_communication(candidate_text)
-            per_question_scores.append({"competencies": q.get("competencies", []), "content_score": content["score"]})
-            question_reports.append({
-                "question_id": qid, "question": q["question_text"], "candidate_answer": candidate_text,
-                "content_score": content, "communication_score": comm,
-            })
+        results = collect_question_results(interview.plan, turns, score_content=score_answer_content,
+                                           score_communication=score_communication)
+        per_question_scores = results["per_question_scores"]
+        question_reports = results["question_reports"]
 
         agg = aggregate_final_score(per_question_scores, interview.role.competencies)
 
         overall = {}
-        if question_reports:
+        if results["answered"]:
             try:
                 overall = generate_overall_summary(
                     interview.candidate.name, interview.role.name, agg["final_score"],
@@ -645,13 +713,23 @@ def _run_scoring_job(interview_id: str, report_id: str):
         coverage_rows = [{"question_id": c.question_id, "followup_count": c.followup_count, "evaluation": c.evaluation}
                          for c in db.query(CoverageResult).filter(CoverageResult.interview_id == interview_id).all()]
         try:
-            intelligence = build_intelligence(interview.plan, question_reports, coverage_rows)
+            intelligence = build_intelligence(interview.plan, question_reports, coverage_rows,
+                                              asked_ids=results["asked_ids"])
         except Exception:
             logger.exception("intelligence section failed; report is still produced")
             intelligence = {}
+        # A hire/no-hire call needs enough evidence: thin interviews get "insufficient_data" instead.
+        unasked_high = intelligence.get("unasked_high_priority") or []
+        overall = guard_recommendation(overall, answered=results["answered"],
+                                       assessed_share=agg.get("assessed_weight_share", 0.0), unasked_high=unasked_high)
+        evaluation = evaluation_status(answered=results["answered"], asked=results["asked"],
+                                       assessed_share=agg.get("assessed_weight_share", 0.0), unasked_high=unasked_high,
+                                       ended_early=ended_early(turns))
         report.content = {
             "questions": question_reports, "candidate": interview.candidate.name,
-            "role": interview.role.name, "overall": overall, **intelligence,
+            "role": interview.role.name, "overall": overall, "evaluation": evaluation,
+            "assessed_weight_share": agg.get("assessed_weight_share"),
+            "answered_questions": results["answered"], "asked_questions": results["asked"], **intelligence,
         }
         report.status = REPORT_READY
         db.commit()
@@ -726,13 +804,35 @@ def complete_interview(interview_id: str, background_tasks: BackgroundTasks, db:
     return {"report_id": report.id, "status": report.status}
 
 
-@app.get("/v1/interviews/{interview_id}/report")
+@app.get("/v1/interviews/{interview_id}/completion")
+def get_completion_receipt(interview_id: str, db: Session = Depends(get_db)):
+    """The candidate-facing result of finishing an interview: that it was submitted, and nothing evaluative.
+    Scores, recommendations, evidence and rubrics are HR data and live behind /report (service key)."""
+    interview = db.get(Interview, interview_id)
+    if not interview:
+        raise HTTPException(404, "not found")
+    submitted = states.is_terminal(interview.status) or interview.status in (states.FINALIZING, states.COMPLETED)
+    return {"interview_id": interview.id, "submitted": submitted,
+            "message": ("Thank you. Your interview has been submitted and will be reviewed by the hiring team."
+                        if submitted else "Your interview is still in progress.")}
+
+
+@app.get("/v1/interviews/{interview_id}/report", dependencies=[Depends(require_service_key)])
 def get_report(interview_id: str, db: Session = Depends(get_db)):
+    """HR-facing evaluation report. Authenticated service-to-service: the HR backend authorises the HR user (role,
+    organisation, ownership) and then calls this. Never reachable from a candidate's browser."""
     report = db.query(Report).filter(Report.interview_id == interview_id).order_by(Report.id.desc()).first()
     if not report:
         raise HTTPException(404, "no report yet")
+    interview = db.get(Interview, interview_id)
+    evaluation = (report.content or {}).get("evaluation") or {}
     return {
+        # `status` is kept for existing consumers and means REPORT GENERATION (PENDING/PROCESSING/READY/FAILED). It
+        # says nothing about the interview or how much evidence the evaluation rests on - the explicit fields do.
         "status": report.status,
+        "report_status": report.status,
+        "interview_status": interview.status if interview else None,
+        "evaluation_status": evaluation.get("status"),
         "final_score": report.final_score,
         "competency_scores": report.competency_scores,
         "content": report.content,

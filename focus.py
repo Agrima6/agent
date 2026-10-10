@@ -188,6 +188,20 @@ def match_focus(text: str, areas: list[FocusArea]) -> FocusArea | None:
     return best if best is not None and best_score >= 0.5 else None
 
 
+def focus_for_question(q: dict, areas: list[FocusArea]) -> FocusArea | None:
+    """The focus area a question serves. A question that declares its competencies belongs to the area of
+    one of THEM; a word it happens to share with another area ("...a technical decision" in a behavioral
+    question) must not file it under that area, because its answer would then be scored as evidence for it.
+    Free-text matching is only used for questions with no competencies, or against HR-written areas."""
+    competencies = {_key(str(c).replace("_", " ")) for c in (q.get("competencies") or [])}
+    if competencies:
+        owned = [a for a in areas if _key(a.name) in competencies]
+        if owned:
+            return min(owned, key=lambda a: (_RANK[a.priority], -(a.weight or 0)))
+        areas = [a for a in areas if "HR" in a.sources]
+    return match_focus(f"{q.get('topic', '')} {q['question_text']}", areas)
+
+
 def followup_limit(base: int, priority: str | None) -> int:
     """Follow-ups a question may get: the interview's base limit adjusted for its focus priority, clamped."""
     delta = followup_deltas().get(priority or "", 0)

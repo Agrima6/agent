@@ -60,6 +60,8 @@ def _process_question(text: str) -> str | None:
 INTRO_TYPES = ("introduction", "candidate_introduction")
 # A candidate is waiting in silence while these run, so each LLM step has a hard deadline. On expiry
 # the interview degrades gracefully (no follow-up / plain deterministic wording) instead of stalling.
+# Upper bound on the answer text (this question so far) handed to the judge.
+MAX_JUDGE_CHARS = 6000
 JUDGE_DEADLINE = 3.5
 COMPOSE_DEADLINE = 2.5
 LOCALIZE_DEADLINE = 8.0        # turning a question into Hindi/Hinglish takes longer than an English lead-in, and falling back to English is worse than waiting
@@ -106,6 +108,30 @@ class InterviewConductor:
         self._localized: dict[tuple[str, str], str] = {}     # (question id, language) -> the question already rendered in that language
         self._localizing: set[asyncio.Task] = set()
         self._last_spoken = ""
+        # Normalised texts of turns queued or being handled right now: a second end-of-turn carrying the same words
+        # while the first is still in flight is one answer reported twice (a duplicated end-of-turn event, or a
+        # "done speaking" press racing the detector) - it must not be answered twice or advance twice.
+        self._inflight_turns: set[str] = set()
+
+    # ---------------------------------------------------------------- diagnostics
+    def _event(self, name: str, **fields) -> None:
+        """One structured line per interview event. Carries ids, counts and decisions - never the candidate's words,
+        tokens or any other sensitive content."""
+        r = self.runner
+        base = {"event": name, "interview": r.interview_id, "question": r.state.question_id if r.state else "-",
+                "idx": r.idx, "followups": r.state.followup_count if r.state else 0}
+        logger.info(" ".join(f"{k}={v}" for k, v in {**base, **fields}.items()))
+
+    @staticmethod
+    def _context_for(q: dict | None) -> list[str]:
+        """What a genuine answer to this question would talk about (lexical anchors for the guard)."""
+        if not q:
+            return []
+        parts = [q.get("question_text") or "", q.get("topic") or "", q.get("focus") or ""]
+        parts += [str(t) for t in (q.get("expected_topics") or [])]
+        parts += [str(t) for t in (q.get("followup_topics") or [])]
+        parts += [str(c).replace("_", " ") for c in (q.get("competencies") or [])]
+        return [p for p in parts if p]
 
     # ---------------------------------------------------------------- lifecycle
     async def start(self) -> None:
@@ -129,19 +155,29 @@ class InterviewConductor:
                                    "p_intro"))
 
     async def handle_candidate_turn(self, text: str) -> None:
-        async with self._lock:
-            r = self.runner
-            if r.terminal:
-                return
-            generation = r.generation
-            started = time.perf_counter()
-            try:
-                await self._handle(text or "", generation)
-            except _Stale:
-                logger.info("discarded stale result interview=%s (interview ended mid-call)", r.interview_id)
-            finally:
-                logger.info("turn_handled interview=%s question=%s ms=%d", r.interview_id,
-                            r.state.question_id if r.state else "-", int((time.perf_counter() - started) * 1000))
+        normalised = " ".join((text or "").lower().split())
+        if normalised and normalised in self._inflight_turns:
+            self._event("turn_duplicate_ignored", words=len(normalised.split()))
+            return
+        if normalised:
+            self._inflight_turns.add(normalised)
+        try:
+            async with self._lock:
+                r = self.runner
+                if r.terminal:
+                    return
+                generation = r.generation
+                started = time.perf_counter()
+                self._event("turn_received", words=len((text or "").split()), chars=len(text or ""))
+                try:
+                    await self._handle(text or "", generation)
+                except _Stale:
+                    logger.info("discarded stale result interview=%s (interview ended mid-call)", r.interview_id)
+                finally:
+                    logger.info("turn_handled interview=%s question=%s ms=%d", r.interview_id,
+                                r.state.question_id if r.state else "-", int((time.perf_counter() - started) * 1000))
+        finally:
+            self._inflight_turns.discard(normalised)
 
     # ---------------------------------------------------------------- helpers
     async def _judge(self, q: dict, text: str, topic: str) -> Evaluation:
@@ -238,15 +274,21 @@ class InterviewConductor:
         requested_language = detect_language_request(text, current=self.language)
         if requested_language:
             return await self._switch_language(requested_language, text, generation)
+        # Asked for the language already in use ("Can I speak in Hindi?" while the interview is in Hindi): there is
+        # nothing to switch, and it is not an answer - never score it. Just put the current question back.
+        if detect_language_request(text, current=None):
+            return await self._repeat(text, Intent.LANGUAGE_REQUEST)
         # The candidate simply started answering in another language: follow them quietly, then handle what they said as
         # a normal answer (no announcement, nothing re-asked).
         if self._follower is not None:
             followed = self._follower.observe(text, self.language)
             if followed and followed != self.language:
                 await self._apply_language(followed, generation, automatic=True)
-        classification = classify(text)
-        intent = classification.intent
         q = r.current_question
+        classification = classify(text, context=self._context_for(q))
+        intent = classification.intent
+        self._event("turn_classified", intent=intent.value, rule=classification.rule or "-",
+                    suspicious=classification.suspicious)
         if q is None:
             return
 
@@ -281,10 +323,10 @@ class InterviewConductor:
                                interruptible=False))
         await r.complete()
 
-    async def _repeat(self, text: str) -> None:
+    async def _repeat(self, text: str, intent: Intent = Intent.REPEAT) -> None:
         r = self.runner
         q = r.current_question
-        self._record_candidate(text, Intent.REPEAT)
+        self._record_candidate(text, intent)
         if r.small_talk_done < r.small_talk_rounds:
             spoken = self._last_spoken or refusals.greeting(self.language, r.candidate_name, self.role, self.interviewer_name)
         else:
@@ -346,18 +388,25 @@ class InterviewConductor:
             self._record_candidate(text, Intent.ANSWER)
             return await self._advance_and_ask(generation, [])
 
-        evaluation = await self._judge(q, text, state.topic)
+        # An answer can arrive in several committed turns (a long pause mid-thought). The judge must see everything the
+        # candidate has said to THIS question, not just the last fragment, or the early fragment is judged as a thin
+        # answer and a follow-up (or a redirect) lands on top of a candidate who is still explaining.
+        judged_text = " ".join([*state.answer_parts, text])[-MAX_JUDGE_CHARS:]
+        evaluation = await self._judge(q, judged_text, state.topic)
         self._check(generation)
 
-        # Second line of defence behind the deterministic guard: phrasings the patterns missed.
-        reclassified = restricted_intent_from_judge(evaluation, text)
+        # Second line of defence behind the deterministic guard: phrasings the patterns missed. A substantive,
+        # on-topic answer is never refused on the model's say-so alone.
+        reclassified = restricted_intent_from_judge(evaluation, text, self._context_for(q))
         if reclassified == Intent.REPEAT:
             return await self._repeat(text)
         if reclassified is not None:
             return await self._refuse(reclassified, text, generation)
 
         self._record_candidate(text, Intent.ANSWER, followup=state.followup_count > 0)
+        state.answer_parts.append(text)
         state.non_answer_count = 0
+        self._event("answer_finalized", parts=len(state.answer_parts), coverage=round(evaluation.coverage_score, 2))
         decision = decide_action(state, evaluation, interview_time_exhausted=r.time_exhausted())
         r.record_coverage_nowait(q["id"], evaluation.as_record(), decision.action.value, state.followup_count)
         # Injection-like text inside a long answer: it is still evaluated, but nothing derived from
@@ -412,7 +461,7 @@ class InterviewConductor:
         Nothing is counted as an answer, a follow-up or a violation."""
         r = self.runner
         q = r.current_question
-        self._record_candidate(text, "language_request")
+        self._record_candidate(text, Intent.LANGUAGE_REQUEST)
         await self._apply_language(new_language, generation)
         confirmation = refusals.LANGUAGE_SWITCHED[self.language]
         asking_now = not (q is None or not q.get("question_text") or r.small_talk_done < r.small_talk_rounds)
@@ -438,8 +487,14 @@ class InterviewConductor:
     async def _advance_and_ask(self, generation: int, mentioned: list[str], prefix: str = "") -> None:
         r = self.runner
         previous = r.current_question
+        # The answer (and its coverage record) must be saved before the interview moves past its question, so a
+        # reconnect or a crash right after the advance cannot lose it. Bounded: a slow API never freezes the interview.
+        await r.flush_pending(timeout=2.0)
+        self._check(generation)
+        from_idx = r.idx
         r.advance()
         nq = r.current_question
+        self._event("question_transition", from_idx=from_idx, to_idx=r.idx, final=nq is None)
         if nq is None:
             return await self._finish()
         composed = await self._compose(ComposeRequest(

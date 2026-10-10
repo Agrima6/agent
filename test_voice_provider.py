@@ -98,8 +98,8 @@ def test_each_interview_keeps_the_provider_it_started_with(client, role_and_cand
     first = create(client, role_id, cand_id).json()["id"]
     put(client, "elevenlabs")                                            # admin changes it mid-interview
     second = create(client, role_id, cand_id).json()["id"]
-    assert client.get(f"/v1/interviews/{first}").json()["voice_provider"] == "sarvam"      # unchanged
-    assert client.get(f"/v1/interviews/{second}").json()["voice_provider"] == "elevenlabs"  # next one uses the new value
+    assert client.get(f"/v1/interviews/{first}/agent-context").json()["voice_provider"] == "sarvam"      # unchanged
+    assert client.get(f"/v1/interviews/{second}/agent-context").json()["voice_provider"] == "elevenlabs"  # next one uses the new value
 
 
 def test_an_explicit_choice_whose_credentials_vanished_fails_clearly_not_silently(client, role_and_candidate, monkeypatch):
