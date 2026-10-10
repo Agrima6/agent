@@ -29,7 +29,8 @@ from livekit.plugins import openai as lk_openai
 from livekit.plugins import silero
 
 from conductor import InterviewConductor, Speech
-from config import (AGENT_NAME, AGENT_SERVICE_KEY, API_BASE_URL, ELEVENLABS_API_KEY, ELEVENLABS_MODEL, ELEVENLABS_VOICE_ID, ELEVENLABS_VOICE_ID_FEMALE,
+from config import (AGENT_NAME, AGENT_SERVICE_KEY, API_BASE_URL, ELEVENLABS_API_KEY, ELEVENLABS_MODEL, ELEVENLABS_PRONUNCIATION_DICTIONARY_ID,
+                    ELEVENLABS_PRONUNCIATION_VERSION_ID, ELEVENLABS_VOICE_ID, ELEVENLABS_VOICE_ID_FEMALE,
                     ELEVENLABS_VOICE_ID_MALE, GROQ_API_KEY, AUTO_LANGUAGE,
                     OPENAI_API_KEY, SARVAM_API_KEY, TTS_PROVIDER, TTS_VOICE, VOICE_PROVIDER_FALLBACK)
 from edge_tts_plugin import EdgeTTS
@@ -110,7 +111,7 @@ def make_turn_handling() -> dict:
 class InterviewerAgent(Agent):
     def __init__(self, runner: InterviewRunner, *, language: str, role: str, experience_level: str,
                  plain_language: bool, interviewer_name: str = "Aarav", publish=None, candidate_ready=None,
-                 on_language_change=None, auto_language: bool = False):
+                 on_language_change=None, auto_language: bool = False, supported_languages=None):
         super().__init__(instructions=_AGENT_DESCRIPTION)
         self.runner = runner
         self._publish = publish   # async (sender, text) -> None: live transcript to the candidate's screen
@@ -124,7 +125,7 @@ class InterviewerAgent(Agent):
         self.conductor = InterviewConductor(
             runner, self._speak, language=language, role=role, experience_level=experience_level,
             plain_language=plain_language, interviewer_name=interviewer_name, on_language_change=on_language_change,
-            auto_language=auto_language)
+            auto_language=auto_language, supported_languages=supported_languages)
 
     async def on_enter(self):
         if self._candidate_ready is not None:
@@ -194,6 +195,32 @@ class VoiceProviderError(RuntimeError):
     """The interview's chosen voice provider cannot be used (for example its credentials are missing)."""
 
 
+# ElevenLabs models that only speak English: using one for a Hindi/Hinglish interview produces English-accented noise.
+ELEVENLABS_ENGLISH_ONLY_MODELS = frozenset({"eleven_monolingual_v1", "eleven_turbo_v2", "eleven_flash_v2"})
+# Models that accept an explicit language code. For these the language is PINNED, so the engine does not guess it from
+# the text of each sentence (the cause of an English sentence being read with Urdu-style pronunciation, and of
+# romanised Hindi being read as English).
+ELEVENLABS_LANGUAGE_CODE_MODELS = frozenset({"eleven_flash_v2_5", "eleven_turbo_v2_5", "eleven_v3"})
+
+
+def is_candidate_identity(identity: str) -> bool:
+    """The API names the candidate's LiveKit identity ``candidate-<id>``; nothing else may end the candidate's turn."""
+    return bool(identity) and identity.startswith("candidate-")
+
+
+def elevenlabs_language(language: str) -> str:
+    """ISO 639-1 code ElevenLabs expects for an interview language (Hinglish is voiced as Hindi)."""
+    return "en" if language == "en" else "hi"
+
+
+def supported_languages_for(provider: str, model: str = "") -> frozenset[str]:
+    """The interview languages this provider/model can actually SPEAK. A switch to anything else is refused with a
+    clear message instead of being attempted with a voice that cannot pronounce it."""
+    if provider == "elevenlabs" and (model or "") in ELEVENLABS_ENGLISH_ONLY_MODELS:
+        return frozenset({"en"})
+    return frozenset(LANGUAGE_CONFIGS)
+
+
 def build_tts(voice: VoiceConfig) -> tuple[tts.TTS, SarvamTTS | None]:
     """Returns (tts for the session, the Sarvam instance if used so its stats can be reported).
 
@@ -212,7 +239,17 @@ def build_tts(voice: VoiceConfig) -> tuple[tts.TTS, SarvamTTS | None]:
     if provider == "elevenlabs":
         if not ELEVENLABS_API_KEY:
             raise VoiceProviderError("Voice provider 'elevenlabs' is selected but ELEVENLABS_API_KEY is not configured.")
+        if voice.language not in supported_languages_for("elevenlabs", ELEVENLABS_MODEL):
+            raise VoiceProviderError(
+                f"ElevenLabs model '{ELEVENLABS_MODEL}' only speaks English but this interview is in "
+                f"{voice.language}. Set ELEVENLABS_MODEL to a multilingual model (e.g. eleven_flash_v2_5).")
         options = {"api_key": ELEVENLABS_API_KEY, "model": ELEVENLABS_MODEL}
+        if ELEVENLABS_MODEL in ELEVENLABS_LANGUAGE_CODE_MODELS:
+            options["language"] = elevenlabs_language(voice.language)
+        if ELEVENLABS_PRONUNCIATION_DICTIONARY_ID and ELEVENLABS_PRONUNCIATION_VERSION_ID:
+            options["pronunciation_dictionary_locators"] = [lk_elevenlabs.PronunciationDictionaryLocator(
+                pronunciation_dictionary_id=ELEVENLABS_PRONUNCIATION_DICTIONARY_ID,
+                version_id=ELEVENLABS_PRONUNCIATION_VERSION_ID)]
         per_gender = ELEVENLABS_VOICE_ID_FEMALE if voice.gender == "female" else ELEVENLABS_VOICE_ID_MALE
         voice_id = per_gender or ELEVENLABS_VOICE_ID
         if voice_id:
@@ -297,6 +334,9 @@ async def entrypoint(ctx: JobContext):
                 stt_engine.update_options(language=cfg["stt_language"])
             current_voice = resolve_voice(new_language, voice_prefs.get("gender"), voice_prefs.get("speaker"),
                                           voice_prefs.get("pace"), provider=voice_provider)
+            if voice_provider == "elevenlabs" and ELEVENLABS_MODEL in ELEVENLABS_LANGUAGE_CODE_MODELS \
+                    and hasattr(tts_engine, "update_options"):
+                tts_engine.update_options(language=elevenlabs_language(normalize_language(new_language)))
             if sarvam is not None:
                 await sarvam.switch_voice(current_voice)
                 units = [u for t in refusals.fixed_phrases(new_language) for u in speech_units(prepare_for_speech(t))]
@@ -374,7 +414,8 @@ async def entrypoint(ctx: JobContext):
                                        plain_language=plain_language,
                                        interviewer_name=INTERVIEWER_NAMES.get(voice.gender, "Aarav"),
                                        publish=publish_transcript, candidate_ready=wait_for_candidate,
-                                       on_language_change=apply_language, auto_language=AUTO_LANGUAGE)
+                                       on_language_change=apply_language, auto_language=AUTO_LANGUAGE,
+                                       supported_languages=supported_languages_for(voice_provider, ELEVENLABS_MODEL))
 
         def on_participant_connected(participant) -> None:
             if participant.kind != rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD:
@@ -398,7 +439,13 @@ async def entrypoint(ctx: JobContext):
             # "Done speaking" button: background noise or a long pause can fool VAD into thinking the
             # candidate is still talking. This lets the candidate force the turn to end right now.
             if packet.topic == "commit_turn":
-                logger.info("received manual commit_turn signal from candidate")
+                # Only the candidate may end their own turn: another participant (or a stray data message) must not
+                # be able to cut an answer short. The identity is the one the API put in the candidate's token.
+                sender = getattr(getattr(packet, "participant", None), "identity", "") or ""
+                if not is_candidate_identity(sender):
+                    logger.warning("event=commit_turn_ignored reason=not_candidate interview=%s", interview_id)
+                    return
+                logger.info("event=commit_turn_received interview=%s", interview_id)
                 try:
                     session.commit_user_turn(transcript_timeout=3.0, stt_flush_duration=1.0)
                 except Exception:

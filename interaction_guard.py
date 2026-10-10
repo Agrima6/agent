@@ -40,6 +40,8 @@ class Intent(str, Enum):
     DONT_KNOW = "dont_know"
     # "Can I speak in Hindi?" - a request about the interview itself, never an answer to the question.
     LANGUAGE_REQUEST = "language_request"
+    # A request for a language the interview does not support, or a transcript in a script no supported language uses.
+    UNSUPPORTED_LANGUAGE = "unsupported_language"
 
 
 # Intents answered with a fixed refusal/redirect and never scored as an answer.
@@ -50,7 +52,7 @@ RESTRICTED_INTENTS = frozenset({
 })
 # Turns that are not an attempt to answer the current question (excluded from scoring).
 NON_ANSWER_INTENTS = RESTRICTED_INTENTS | {Intent.EMPTY, Intent.REPEAT, Intent.SKIP, Intent.END_INTERVIEW,
-                                           Intent.LANGUAGE_REQUEST}
+                                           Intent.LANGUAGE_REQUEST, Intent.UNSUPPORTED_LANGUAGE}
 
 MAX_REQUEST_WORDS = 35
 MAX_CONTROL_WORDS = 20  # skip / end-interview phrases

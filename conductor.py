@@ -35,13 +35,15 @@ from typing import Awaitable, Callable
 import refusals
 from composer import ComposeRequest, Composed, Composer
 from language_detect import LanguageFollower
-from language_switch import detect_language_request
+from language_switch import detect_language_request, detect_unsupported_language_request
+from language_policy import has_unexpected_script
 from interaction_guard import Classification, Intent, RESTRICTED_INTENTS, classify
 from languages import normalize_language
 from policy import Action, Evaluation, decide_action, judge_answer, restricted_intent_from_judge
 from runner import InterviewRunner, question_topic
 
 import turn_trace
+from turn_state import TurnPhase, TurnStateMachine
 
 logger = logging.getLogger("conductor")
 
@@ -88,8 +90,11 @@ class InterviewConductor:
                  language: str = "en", role: str = "", experience_level: str = "",
                  plain_language: bool = False, composer: Composer | None = None,
                  judge: Callable = judge_answer, interviewer_name: str = "Aarav", on_language_change=None,
-                 auto_language: bool = False):
+                 auto_language: bool = False, supported_languages=None):
         self.runner = runner
+        # Languages the configured voice can actually speak (None = all). A switch - requested or followed - to
+        # anything else is refused rather than attempted with a voice that cannot pronounce it.
+        self.supported_languages = frozenset(supported_languages) if supported_languages else None
         # Called (sync or async) with the new language code when the candidate asks to switch: the agent job uses it to
         # retune speech recognition and the voice. Failures are logged and never stop the interview.
         self.on_language_change = on_language_change
@@ -112,6 +117,8 @@ class InterviewConductor:
         # while the first is still in flight is one answer reported twice (a duplicated end-of-turn event, or a
         # "done speaking" press racing the detector) - it must not be answered twice or advance twice.
         self._inflight_turns: set[str] = set()
+        self.turns = TurnStateMachine()          # QUESTION_DELIVERED -> ... -> ANSWER_SAVED -> DECIDING (see turn_state.py)
+        self._advanced_turn = 0                  # the finalized-turn number that already advanced the interview
 
     # ---------------------------------------------------------------- diagnostics
     def _event(self, name: str, **fields) -> None:
@@ -119,7 +126,8 @@ class InterviewConductor:
         tokens or any other sensitive content."""
         r = self.runner
         base = {"event": name, "interview": r.interview_id, "question": r.state.question_id if r.state else "-",
-                "idx": r.idx, "followups": r.state.followup_count if r.state else 0}
+                "idx": r.idx, "followups": r.state.followup_count if r.state else 0, "phase": self.turns.phase.value,
+                "turn": self.turns.turn_number}
         logger.info(" ".join(f"{k}={v}" for k, v in {**base, **fields}.items()))
 
     @staticmethod
@@ -168,6 +176,12 @@ class InterviewConductor:
                     return
                 generation = r.generation
                 started = time.perf_counter()
+                if not self.turns.go(TurnPhase.TURN_FINALIZED):
+                    # A previous turn ended without the interviewer speaking (e.g. a failed provider call). Resync and
+                    # carry on rather than refusing a candidate's answer; the rejected transition is in the log.
+                    self._event("turn_phase_rejected", target=TurnPhase.TURN_FINALIZED.value)
+                    self.turns.phase = TurnPhase.QUESTION_DELIVERED
+                    self.turns.go(TurnPhase.TURN_FINALIZED)
                 self._event("turn_received", words=len((text or "").split()), chars=len(text or ""))
                 try:
                     await self._handle(text or "", generation)
@@ -250,6 +264,7 @@ class InterviewConductor:
         if r.terminal and speech.action != "INTERVIEW_COMPLETE":
             return
         self._last_spoken = speech.text
+        self.turns.go(TurnPhase.COMPLETED if speech.action == "INTERVIEW_COMPLETE" else TurnPhase.QUESTION_DELIVERED)
         r.record_turn_nowait(speech.question_id or (r.state.question_id if r.state else ""), "agent", speech.text,
                              is_followup=speech.is_followup, action=speech.action,
                              question_text=speech.question_text)
@@ -272,17 +287,27 @@ class InterviewConductor:
         r = self.runner
         # "Can you speak in Hindi?" changes the interview language for the rest of the session.
         requested_language = detect_language_request(text, current=self.language)
+        if requested_language and self.supported_languages and requested_language not in self.supported_languages:
+            return await self._unsupported_language(text, requested=True)
         if requested_language:
             return await self._switch_language(requested_language, text, generation)
         # Asked for the language already in use ("Can I speak in Hindi?" while the interview is in Hindi): there is
         # nothing to switch, and it is not an answer - never score it. Just put the current question back.
         if detect_language_request(text, current=None):
             return await self._repeat(text, Intent.LANGUAGE_REQUEST)
+        # A request for a language this interview cannot conduct (Urdu, Tamil...), or a transcript in a script no supported
+        # language uses (Whisper labelling Hindustani as Urdu, or genuinely unsupported speech): never an answer, never
+        # quoted back, never allowed to move the interview language. The original transcript is still saved as spoken.
+        if detect_unsupported_language_request(text):
+            return await self._unsupported_language(text, requested=True)
+        if has_unexpected_script(text):
+            return await self._unsupported_language(text, requested=False)
         # The candidate simply started answering in another language: follow them quietly, then handle what they said as
         # a normal answer (no announcement, nothing re-asked).
         if self._follower is not None:
             followed = self._follower.observe(text, self.language)
-            if followed and followed != self.language:
+            if followed and followed != self.language and (
+                    not self.supported_languages or followed in self.supported_languages):
                 await self._apply_language(followed, generation, automatic=True)
         q = r.current_question
         classification = classify(text, context=self._context_for(q))
@@ -314,6 +339,21 @@ class InterviewConductor:
             return await self._refuse(intent, text, generation)
 
         await self._answer_turn(text, classification, generation)
+
+    async def _unsupported_language(self, text: str, *, requested: bool) -> None:
+        """Fixed reply; the interview language, the question and the question timer are all left exactly as they were."""
+        r = self.runner
+        q = r.current_question
+        self._record_candidate(text, Intent.UNSUPPORTED_LANGUAGE)
+        self._event("unsupported_language", requested=requested)
+        in_question = q is not None and r.small_talk_done >= r.small_talk_rounds and q.get("question_text")
+        if requested:
+            spoken = refusals.UNSUPPORTED_LANGUAGE[self.language]
+            if in_question:
+                spoken = f"{spoken} {r.last_question_text or q['question_text']}"
+        else:
+            spoken = refusals.DIDNT_CATCH_LANGUAGE[self.language]
+        await self._say(Speech(spoken, "REDIRECT", (q or {}).get("id", ""), (q or {}).get("question_text", "")))
 
     async def _end_early(self, text: str) -> None:
         r = self.runner
@@ -404,9 +444,11 @@ class InterviewConductor:
             return await self._refuse(reclassified, text, generation)
 
         self._record_candidate(text, Intent.ANSWER, followup=state.followup_count > 0)
+        self.turns.go(TurnPhase.ANSWER_SAVED)
         state.answer_parts.append(text)
         state.non_answer_count = 0
         self._event("answer_finalized", parts=len(state.answer_parts), coverage=round(evaluation.coverage_score, 2))
+        self.turns.go(TurnPhase.DECIDING)
         decision = decide_action(state, evaluation, interview_time_exhausted=r.time_exhausted())
         r.record_coverage_nowait(q["id"], evaluation.as_record(), decision.action.value, state.followup_count)
         # Injection-like text inside a long answer: it is still evaluated, but nothing derived from
@@ -486,6 +528,12 @@ class InterviewConductor:
     # ---------------------------------------------------------------- moving on
     async def _advance_and_ask(self, generation: int, mentioned: list[str], prefix: str = "") -> None:
         r = self.runner
+        if self.turns.turn_number and self._advanced_turn == self.turns.turn_number:
+            # One finalized turn advances the interview at most once, whatever else is racing.
+            self._event("advance_ignored_duplicate")
+            return
+        self._advanced_turn = self.turns.turn_number
+        self.turns.go(TurnPhase.DECIDING)
         previous = r.current_question
         # The answer (and its coverage record) must be saved before the interview moves past its question, so a
         # reconnect or a crash right after the advance cannot lose it. Bounded: a slow API never freezes the interview.
