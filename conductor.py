@@ -36,7 +36,7 @@ import refusals
 from composer import ComposeRequest, Composed, Composer
 from language_detect import LanguageFollower
 from language_switch import detect_language_request, detect_unsupported_language_request
-from language_policy import (MIN_WORDS_AFTER_CLEANING, clean_transcript, has_unexpected_script)
+from language_policy import (MIN_WORDS_AFTER_CLEANING, clean_transcript, has_unexpected_script, script_profile)
 from interaction_guard import Classification, Intent, RESTRICTED_INTENTS, classify
 from languages import normalize_language
 from policy import Action, Evaluation, decide_action, judge_answer, restricted_intent_from_judge
@@ -322,7 +322,10 @@ class InterviewConductor:
         if removed:
             self._event("unexpected_script_removed", letters=removed)
             if len(cleaned.split()) < MIN_WORDS_AFTER_CLEANING:
-                return await self._unsupported_language(text, requested=False)
+                if script_profile(text)["arabic"]:
+                    return await self._unsupported_language(text, requested=False)
+                # Only the recogniser's own prompt (or other noise) was removed: there was nothing said at all.
+                return await self._refuse(Intent.EMPTY, text, generation)
             text = cleaned
         # The candidate simply started answering in another language: follow them quietly, then handle what they said as
         # a normal answer (no announcement, nothing re-asked) - but never against an explicit request.
@@ -341,6 +344,8 @@ class InterviewConductor:
 
         if intent == Intent.END_INTERVIEW:
             return await self._end_early(text)
+        if intent in (Intent.PRESENCE_CHECK, Intent.NEED_TIME):
+            return await self._acknowledge(intent, text)
         if r.small_talk_done < r.small_talk_rounds:
             return await self._small_talk_turn(text, classification, generation)
 
@@ -360,7 +365,45 @@ class InterviewConductor:
         if intent in RESTRICTED_INTENTS:
             return await self._refuse(intent, text, generation)
 
+        # A question about the interview itself ("how long will this take?", "is this a recorded conversation?") during
+        # the interview proper: answer it from facts the runner holds, then hand the turn back. Never judged.
+        if intent == Intent.ANSWER and len(text.split()) <= 14 and (topic := _process_question(text)):
+            self._record_candidate(text, "process_question")
+            answer = refusals.PROCESS_ANSWERS[topic][self.language].format(minutes=r.duration_minutes)
+            return await self._say(Speech(f"{answer} {refusals.PLEASE_CONTINUE[self.language]}", "SMALL_TALK",
+                                          q["id"], q.get("question_text", "")))
+
         await self._answer_turn(text, classification, generation)
+
+    async def _acknowledge(self, intent: Intent, text: str) -> None:
+        """"Are you there?" / "give me a moment": a fixed, kind reply. Not an answer, not a refusal, not counted, and the
+        question (and its timer) are left exactly as they were."""
+        r = self.runner
+        q = r.current_question
+        self._record_candidate(text, intent)
+        table = refusals.ACK_PRESENCE if intent == Intent.PRESENCE_CHECK else refusals.ACK_NEED_TIME
+        self._event("acknowledged", kind=intent.value)
+        await self._say(Speech(table[self.language], "ACK", (q or {}).get("id", ""), (q or {}).get("question_text", "")))
+
+    async def idle_nudge(self) -> None:
+        """The candidate has been silent for a while (LiveKit's "away" state). Say something gentle - never skip,
+        score or count it. Skipped if a turn is being handled, the interview is over, or the agent has nudged twice."""
+        r = self.runner
+        if r.terminal or self._lock.locked() or r.state is None or r.current_question is None:
+            return
+        if r.small_talk_done < r.small_talk_rounds or self.turns.phase != TurnPhase.QUESTION_DELIVERED:
+            return                                    # before the interview proper, or mid-decision: not idle
+        state = r.state
+        if state.idle_nudges >= 2:
+            return
+        state.idle_nudges += 1
+        q = r.current_question
+        spoken = refusals.IDLE_NUDGE[self.language] if state.idle_nudges == 1 else refusals.AUDIO_TROUBLE[self.language]
+        self._event("idle_nudge", count=state.idle_nudges)
+        async with self._lock:
+            if r.terminal:
+                return
+            await self._say(Speech(spoken, "NUDGE", q["id"], q.get("question_text", "")))
 
     async def _unsupported_language(self, text: str, *, requested: bool) -> None:
         """Fixed reply; the interview language, the question and the question timer are all left exactly as they were."""
@@ -401,6 +444,15 @@ class InterviewConductor:
         q = r.current_question
         state = r.state
         self._record_candidate(text, intent)
+        if intent == Intent.EMPTY:
+            # Silence, noise, the recogniser echoing its own prompt, a repeated word: nothing the candidate chose to say,
+            # so it can never count toward skipping a question (three of these once ended a whole interview). After a
+            # few in a row it is almost certainly the microphone, and the interviewer says so.
+            state.noise_count += 1
+            key = "AUDIO_TROUBLE" if state.noise_count % 3 == 0 else None
+            spoken = refusals.AUDIO_TROUBLE[self.language] if key else self.picker.pick(intent, self.language)
+            self._event("noise_turn", count=state.noise_count)
+            return await self._say(Speech(spoken, "REDIRECT", (q or {}).get("id", ""), (q or {}).get("question_text", "")))
         state.non_answer_count += 1
         if state.non_answer_count >= MAX_CONSECUTIVE_NON_ANSWERS and r.small_talk_done >= r.small_talk_rounds:
             logger.info("moving on after %d non-answers interview=%s question=%s", state.non_answer_count,
@@ -462,6 +514,12 @@ class InterviewConductor:
         reclassified = restricted_intent_from_judge(evaluation, text, self._context_for(q))
         if reclassified == Intent.REPEAT:
             return await self._repeat(text)
+        if reclassified == Intent.UNRELATED and not state.judge_unrelated_softened:
+            # Only the language model called this off-topic (no deterministic rule fired). Garbled speech-to-text looks
+            # exactly like that, and "that is outside the interview" is the wrong thing to say to a candidate who was
+            # misheard. The first time per question, treat it as "I didn't catch that" and let them try again.
+            state.judge_unrelated_softened = True
+            return await self._refuse(Intent.EMPTY, text, generation)
         if reclassified is not None:
             return await self._refuse(reclassified, text, generation)
 
@@ -469,6 +527,7 @@ class InterviewConductor:
         self.turns.go(TurnPhase.ANSWER_SAVED)
         state.answer_parts.append(text)
         state.non_answer_count = 0
+        state.noise_count = 0
         self._event("answer_finalized", parts=len(state.answer_parts), coverage=round(evaluation.coverage_score, 2))
         self.turns.go(TurnPhase.DECIDING)
         decision = decide_action(state, evaluation, interview_time_exhausted=r.time_exhausted())

@@ -86,3 +86,28 @@ reproduced in code with the exact utterance before it was fixed; replayed in `te
   Read `turn_trace` (`ttfa_ms`, `judge_ms`, `compose_ms`) and `turn_trace_tts` from a session before tuning; lowering
   `TURN_MIN_DELAY_S` to 1.2–1.5 trades pause tolerance for speed.
 * Proper names are mis-heard by Whisper ("Nareenr Modi"); no fix without a vocabulary list.
+
+---
+
+# Addendum C — "Job interview with Arav from Workmate." and the interview that ended by itself
+
+Source: a live-transcript screenshot. The candidate's lines included "Job interview with Arav from Workmate." (three
+times), "चलाज़, चलाज़, चलाज़." and garbled Hindi, after which the interviewer said the interview was complete.
+
+| # | Finding | Status | Fix |
+|---|---|---|---|
+| C1 | "Job interview with Arav from Workmate." is **our own Whisper prompt** (`STT_VOCABULARY_HINT = "Job interview with Arav from WorkmateIQ. …"`) echoed back as a transcript on low-speech audio. It was classified as an *answer*, judged off-topic and refused | **CONFIRMED** (string match to the prompt in `agent.py`) | The prompt is now a glossary (`language_policy.STT_VOCABULARY_HINT`), and `is_prompt_echo` / `remove_prompt_echo` catch any echoed run (also the legacy sentence, so in-flight sessions are covered) |
+| C2 | A word repeated three times ("चलाज़ ×3") passed as an answer | **CONFIRMED** — the tokenizer split Devanagari at combining marks, so no word-level check could see it | Devanagari-aware tokenizer; same word ×3 in a row = noise |
+| C3 | Three refusals on the last question → "move on" → no next question → **the interview ended** | **CONFIRMED** (`_refuse` counted every intent, including noise) | Noise (`EMPTY`) never counts toward skipping; after 3 in a row the interviewer says it is having trouble hearing and asks the candidate to check the microphone |
+| C4 | Garbled speech-to-text looks "off-topic" to the language model and drew "that is outside the interview" | **CONFIRMED** mechanism | A verdict that comes *only* from the model (no deterministic rule) is softened the first time per question to "I didn't catch that" |
+| C5 | "Are you still there?", "Can you hear me?", "I can't hear you", "give me a second", "let me think", "my internet is slow" were all treated as answers (one was once stored as the candidate's introduction) | **CONFIRMED** by classifying them | New non-answer intents `presence_check` and `need_time` with fixed kind replies; audio complaints repeat the question; none is judged, scored or counted; a long answer that begins "let me think…" is still an answer |
+| C6 | No handling of a silent candidate | **CONFIRMED gap** | LiveKit `away` state (`USER_AWAY_TIMEOUT_S`, default 25 s) → at most two gentle nudges (second one is the microphone hint); never skips or scores |
+| C7 | Questions about the interview itself ("how long will this take?") were judged | **CONFIRMED** | Answered from known facts, then "please continue"; never judged |
+| C8 | Captions showed noise as if the candidate had said it | **CONFIRMED** | Noise is not published as a caption (still stored for audit) |
+| C9 | Report text could contain echoed prompt text | **CONFIRMED** | `evaluation.answer_text_for` uses the same cleaned view |
+
+New tests: `test_noise_and_edge_cases.py` (42). Not verifiable here: how often Whisper echoes a glossary prompt on real
+audio (the detector is the safety net either way) and the exact false-positive rate of the repetition rule on very
+unusual real answers; a candidate who really says "no no no no" is asked to repeat, never penalised.
+
+New settings: `USER_AWAY_TIMEOUT_S` (default 25).

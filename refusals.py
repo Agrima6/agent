@@ -231,6 +231,34 @@ DIDNT_CATCH_LANGUAGE = {
     "hi": "माफ़ कीजिए, मैं इसे साफ़ नहीं समझ पाया। क्या आप इसे अंग्रेज़ी, हिंदी या हिंग्लिश में फिर से कह सकते हैं?",
     "hinglish": "Sorry, मैं ये clearly नहीं समझ पाया। क्या आप इसे English, Hindi या Hinglish में फिर से कह सकते हैं?",
 }
+# Replies to "Are you there?" / "Can you hear me?" and to "give me a moment" / "my internet is slow".
+ACK_PRESENCE = {
+    "en": "Yes, I can hear you clearly. Please go ahead whenever you're ready.",
+    "hi": "जी हाँ, मुझे आपकी आवाज़ साफ़ सुनाई दे रही है। आप जब चाहें शुरू कर सकते हैं।",
+    "hinglish": "Yes, मुझे आपकी आवाज़ clearly सुनाई दे रही है। आप जब ready हों, शुरू कीजिए।",
+}
+ACK_NEED_TIME = {
+    "en": "Of course, take your time. I'll be here when you're ready.",
+    "hi": "ज़रूर, आराम से सोचिए। जब आप तैयार हों, बता दीजिएगा।",
+    "hinglish": "Of course, take your time, आराम से सोचिए। जब आप ready हों, बता दीजिएगा।",
+}
+PLEASE_CONTINUE = {
+    "en": "Please continue with your answer.",
+    "hi": "कृपया अपना जवाब जारी रखिए।",
+    "hinglish": "Please अपना answer जारी रखिए।",
+}
+# After a quiet stretch (the candidate has said nothing): a gentle nudge, never a skip or a penalty.
+IDLE_NUDGE = {
+    "en": "Take your time. I'm here whenever you're ready, and I can repeat the question if that helps.",
+    "hi": "आराम से सोचिए। जब आप तैयार हों, मैं यहीं हूँ। चाहें तो मैं सवाल दोबारा दोहरा सकता हूँ।",
+    "hinglish": "Take your time, आराम से सोचिए। जब आप ready हों, मैं यहीं हूँ। चाहें तो मैं question repeat कर सकता हूँ।",
+}
+# After repeated unintelligible audio: it is probably the microphone, not the answer.
+AUDIO_TROUBLE = {
+    "en": "I'm having trouble hearing you clearly. Could you check your microphone and speak a little closer to it?",
+    "hi": "मुझे आपकी आवाज़ साफ़ नहीं आ रही है। क्या आप अपना माइक्रोफ़ोन देख लेंगे और थोड़ा पास आकर बोलेंगे?",
+    "hinglish": "मुझे आपकी आवाज़ clearly नहीं आ रही है। क्या आप अपना microphone check करके थोड़ा पास आकर बोलेंगे?",
+}
 # Spoken when the same question has drawn several non-answers in a row; the engine then moves on.
 MOVE_ON = {
     "en": "Let's try another question.",
@@ -291,7 +319,8 @@ def fixed_phrases(language: str | None, *, essential_only: bool = False) -> list
     else:
         lines = [text for variants in refusals.values() for text in variants]
     lines += [MOVE_ON[lang], READY_TO_BEGIN[lang], CLOSING[lang], EARLY_END[lang],
-              UNSUPPORTED_LANGUAGE[lang], DIDNT_CATCH_LANGUAGE[lang]]
+              UNSUPPORTED_LANGUAGE[lang], DIDNT_CATCH_LANGUAGE[lang], IDLE_NUDGE[lang], AUDIO_TROUBLE[lang],
+              ACK_PRESENCE[lang], ACK_NEED_TIME[lang], PLEASE_CONTINUE[lang]]
     if not essential_only:
         lines += [SMALL_TALK_FOLLOWUP[lang], WELCOME_BACK[lang]]
     return list(dict.fromkeys(lines))
