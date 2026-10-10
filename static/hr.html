@@ -411,8 +411,8 @@ function renderReport(data) {
   }
 
   const overall = content.overall || {};
-  const recColors = { strong_hire: "#056a4f", hire: "#166534", borderline: "#92400e", no_hire: "#a2263a" };
-  const recLabels = { strong_hire: "Strong Hire", hire: "Hire", borderline: "Borderline", no_hire: "No Hire" };
+  const recColors = { strong_hire: "#056a4f", hire: "#166534", borderline: "#92400e", no_hire: "#a2263a", insufficient_data: "#475569" };
+  const recLabels = { strong_hire: "Strong Hire", hire: "Hire", borderline: "Borderline", no_hire: "No Hire", insufficient_data: "Not enough data" };
   const recColor = recColors[overall.recommendation] || "#374151";
   const overallHtml = overall.summary ? `
     <div class="overall-card">

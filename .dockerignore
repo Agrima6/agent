@@ -1,0 +1,9 @@
+.venv
+__pycache__
+*.pyc
+.git
+.pytest_cache
+.env
+workmate.db
+scratch_lk_api.txt
+.claude
