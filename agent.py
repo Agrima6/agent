@@ -483,6 +483,15 @@ async def entrypoint(ctx: JobContext):
         # session has ended.
         await runner.done.wait()
 
+        # The interview really finished (not just a candidate who dropped): say so explicitly, so the candidate's
+        # browser can submit, stop recording and leave at once instead of inferring it from the agent disappearing.
+        if runner.terminal:
+            try:
+                await ctx.room.local_participant.publish_data(
+                    json.dumps({"reason": "agent_ended", "timestamp": time.time()}), reliable=True, topic="interview_end")
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("interview_end publish failed: %s", exc)
+
         if sarvam is not None:
             runner.record_tts_metadata_nowait({"tts_stats": sarvam.stats.snapshot()})
         await runner.flush_pending()
