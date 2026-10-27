@@ -22,10 +22,9 @@ class Role(Base):
     id = Column(String, primary_key=True, default=lambda: gen_id("role"))
     name = Column(String, nullable=False)
     competencies = Column(JSON, nullable=False)  # [{"key": "...", "weight": 0.3}, ...]
-    # LLM-generated scenario questions tailored to this exact role title, generated once and
-    # reused for every candidate who interviews for it — every candidate for the same role gets
-    # the same questions, which is what makes their scores fairly comparable to each other.
-    # (Regenerating fresh questions per-candidate would make cross-candidate comparison unfair.)
+    # Role-LEVEL scenario questions (not tied to any candidate), generated once and reused. Since the personalised-question
+    # change each interview normally gets its own set written for that candidate (stored only in that interview's plan);
+    # this cache is the controlled fallback used when that generation fails. It never contains a candidate's own questions.
     generated_questions = Column(JSON, nullable=True)
 
 

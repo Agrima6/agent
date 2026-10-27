@@ -291,6 +291,164 @@ def _clean(value: str, limit: int) -> str:
     return re.sub(r"[<>{}\[\]`*_#]", "", re.sub(r"\s+", " ", value)).strip()[:limit]
 
 
+# ------------------------------------------------------------------------------------------------------------
+# The structured opening (see interview_flow.py): introduction -> clarification -> readiness -> resume questions ->
+# environment check -> main interview. All fixed text: nothing here is generated, so nothing can be invented.
+# Hindi/Hinglish keep the impersonal phrasing used above so they read correctly with either voice.
+# ------------------------------------------------------------------------------------------------------------
+_INTRO_HEAD = {
+    "en": "Hi{name_part}, welcome to your interview. My name is {interviewer}, and I'll be conducting your interview{role_part} today.",
+    "hi": "नमस्ते{name_part}, आपके इंटरव्यू में स्वागत है। मेरा नाम {interviewer} है, और आज मैं आपका इंटरव्यू{role_part} लूँगा।",
+    "hinglish": "Hi{name_part}, आपके interview में welcome। मेरा नाम {interviewer} है, और आज मैं आपका interview{role_part} लूँगा।",
+}
+_INTRO_ROLE = {"en": " for the {role} position", "hi": " ({role} रोल के लिए)", "hinglish": " ({role} role के लिए)"}
+_INTRO_CV_NOTICED = {
+    "en": " I've reviewed your CV and was interested to see {noticed}.",
+    "hi": " मैंने आपका CV देखा है और उसमें {noticed} देखकर मुझे अच्छा लगा।",
+    "hinglish": " मैंने आपका CV देखा है और उसमें {noticed} देखकर अच्छा लगा।",
+}
+_INTRO_CV_ONLY = {
+    "en": " I've reviewed your CV.", "hi": " मैंने आपका CV देखा है।", "hinglish": " मैंने आपका CV देखा है।",
+}
+_NOTICED_PROJECT = {"en": "your project {value}", "hi": "आपका प्रोजेक्ट {value}", "hinglish": "आपका project {value}"}
+_NOTICED_SKILL = {"en": "your experience with {value}", "hi": "{value} में आपका अनुभव", "hinglish": "{value} में आपका experience"}
+_NOTICED_COMPANY = {"en": "your work with {value}", "hi": "{value} में आपका काम", "hinglish": "{value} में आपका work"}
+_AND = {"en": " and ", "hi": " और ", "hinglish": " और "}
+_INTRO_EXPERIENCE = {
+    "en": " I understand you have around {value} of experience.",
+    "hi": " मैं समझता हूँ कि आपके पास लगभग {value} का अनुभव है।",
+    "hinglish": " मैं समझता हूँ कि आपके पास around {value} का experience है।",
+}
+_INTRO_PLAN_WITH_CV = {
+    "en": " I'll ask a couple of questions about your background first, then we'll continue with the interview.",
+    "hi": " मैं पहले आपके बैकग्राउंड के बारे में एक-दो सवाल पूछूँगा, फिर हम इंटरव्यू आगे बढ़ाएँगे।",
+    "hinglish": " मैं पहले आपके background के बारे में एक-दो questions पूछूँगा, फिर हम interview आगे बढ़ाएँगे।",
+}
+_INTRO_PLAN_NO_CV = {
+    "en": " I'll start with a question about your background, then we'll continue with the interview.",
+    "hi": " मैं आपके बैकग्राउंड के बारे में एक सवाल से शुरू करूँगा, फिर हम इंटरव्यू आगे बढ़ाएँगे।",
+    "hinglish": " मैं आपके background के बारे में एक question से शुरू करूँगा, फिर हम interview आगे बढ़ाएँगे।",
+}
+CLARIFY_ASK = {
+    "en": " Before we begin, is there anything about the role, the interview format, or the instructions you'd like me to clarify?",
+    "hi": " शुरू करने से पहले, क्या रोल, इंटरव्यू के फ़ॉर्मेट या निर्देशों के बारे में कुछ स्पष्ट करना है?",
+    "hinglish": " शुरू करने से पहले, क्या role, interview format या instructions के बारे में कुछ clarify करना है?",
+}
+CLARIFY_MORE = {
+    "en": "Does that help? Do you have any other questions or doubts?",
+    "hi": "क्या इससे बात साफ़ हुई? क्या कोई और सवाल या संदेह है?",
+    "hinglish": "क्या इससे बात clear हुई? क्या कोई और question या doubt है?",
+}
+CLARIFY_GO_AHEAD = {
+    "en": "Of course, please go ahead and ask.", "hi": "ज़रूर, कृपया पूछिए।", "hinglish": "Of course, please पूछिए।",
+}
+CLARIFY_RETRY = {
+    "en": "Sorry, I didn't quite catch that. Do you have any questions about the role or the interview? You can simply say, no questions.",
+    "hi": "माफ़ कीजिए, मैं ठीक से समझ नहीं पाया। क्या रोल या इंटरव्यू के बारे में कोई सवाल है? चाहें तो बस कह दीजिए, कोई सवाल नहीं।",
+    "hinglish": "Sorry, मैं ठीक से समझ नहीं पाया। क्या role या interview के बारे में कोई question है? चाहें तो बस कह दीजिए, कोई question नहीं।",
+}
+CLARIFY_UNKNOWN = {
+    "en": "I'm not able to confirm that detail from the interview instructions I have, so I don't want to guess. The hiring team can help with it after the interview.",
+    "hi": "मेरे पास मौजूद इंटरव्यू निर्देशों से मैं यह जानकारी पक्की नहीं कर सकता, इसलिए अंदाज़ा नहीं लगाना चाहता। इंटरव्यू के बाद हायरिंग टीम इसमें मदद कर सकती है।",
+    "hinglish": "मेरे पास जो interview instructions हैं उनसे मैं यह detail confirm नहीं कर सकता, इसलिए guess नहीं करना चाहता। Interview के बाद hiring team इसमें help कर सकती है।",
+}
+CLARIFY_ROLE = {
+    "en": "This interview is for the {role} position. I don't have more detail about the role than that, but the hiring team can share it after the interview.",
+    "hi": "यह इंटरव्यू {role} पद के लिए है। रोल के बारे में इससे ज़्यादा जानकारी मेरे पास नहीं है, पर इंटरव्यू के बाद हायरिंग टीम बता सकती है।",
+    "hinglish": "यह interview {role} position के लिए है। Role के बारे में इससे ज़्यादा detail मेरे पास नहीं है, पर interview के बाद hiring team बता सकती है।",
+}
+CLARIFY_RESULT = {
+    "en": "The hiring team will review your interview and notify you by email about the result.",
+    "hi": "हायरिंग टीम आपके इंटरव्यू की समीक्षा करेगी और परिणाम की जानकारी आपको ईमेल से देगी।",
+    "hinglish": "Hiring team आपके interview का review करेगी और result की जानकारी आपको email से देगी।",
+}
+CLARIFY_LIMIT = {
+    "en": "I've noted those questions, and the hiring team can follow up on anything I couldn't cover.",
+    "hi": "मैंने आपके सवाल नोट कर लिए हैं, जिन बातों का जवाब मैं नहीं दे सका, उन पर हायरिंग टीम बाद में बात कर सकती है।",
+    "hinglish": "मैंने आपके questions note कर लिए हैं, जिन बातों का answer मैं नहीं दे सका, उन पर hiring team बाद में बात कर सकती है।",
+}
+READINESS_ASK = {
+    "en": "Is everything clear, and are you ready to begin the interview?",
+    "hi": "क्या सब कुछ स्पष्ट है, और क्या आप इंटरव्यू शुरू करने के लिए तैयार हैं?",
+    "hinglish": "क्या सब कुछ clear है, और क्या आप interview शुरू करने के लिए ready हैं?",
+}
+READINESS_NOT_READY = {
+    "en": "No problem. Do you need a moment, or is there something else you'd like to ask before we begin?",
+    "hi": "कोई बात नहीं। क्या आपको थोड़ा समय चाहिए, या शुरू करने से पहले कुछ और पूछना है?",
+    "hinglish": "कोई बात नहीं। क्या आपको थोड़ा time चाहिए, या शुरू करने से पहले कुछ और पूछना है?",
+}
+READINESS_RETRY = {
+    "en": "Sorry, I want to be sure. Are you ready to begin the interview? A simple yes or no is fine.",
+    "hi": "माफ़ कीजिए, मैं पक्का करना चाहता हूँ। क्या आप इंटरव्यू शुरू करने के लिए तैयार हैं? हाँ या ना कह दीजिए।",
+    "hinglish": "Sorry, मैं sure होना चाहता हूँ। क्या आप interview शुरू करने के लिए ready हैं? Yes या no कह दीजिए।",
+}
+READINESS_WAIT = {
+    "en": "Take your time. Just let me know when you're ready to begin.",
+    "hi": "आराम से तैयार हो जाइए। जब शुरू करना चाहें, बता दीजिएगा।",
+    "hinglish": "Take your time। जब शुरू करना चाहें, बता दीजिएगा।",
+}
+RESUME_LEAD = {
+    "en": "Great, let's begin.", "hi": "बढ़िया, चलिए शुरू करते हैं।", "hinglish": "Great, चलिए शुरू करते हैं।",
+}
+RESUME_NEXT = {
+    "en": "Thank you. One more about your background.", "hi": "धन्यवाद। आपके बैकग्राउंड के बारे में एक और सवाल।",
+    "hinglish": "Thank you। आपके background के बारे में एक और question।",
+}
+ENV_ASK = {
+    "en": "Thank you, that helps me understand your background. Before we move on, a quick check: are you in a quiet place where you can speak without interruption, and can you hear me clearly?",
+    "hi": "धन्यवाद, इससे मुझे आपके बैकग्राउंड को समझने में मदद मिली। आगे बढ़ने से पहले एक छोटी जाँच: क्या आप किसी शांत जगह पर हैं जहाँ बिना रुकावट बोल सकें, और क्या आपको मेरी आवाज़ साफ़ सुनाई दे रही है?",
+    "hinglish": "Thank you, इससे मुझे आपका background समझने में help मिली। आगे बढ़ने से पहले एक quick check: क्या आप किसी quiet जगह पर हैं जहाँ बिना interruption बोल सकें, और क्या आपको मेरी आवाज़ clearly सुनाई दे रही है?",
+}
+ENV_RETRY = {
+    "en": "Please move somewhere quieter if you can, and check that your microphone and speakers are working. Tell me when you're ready and I'll continue.",
+    "hi": "कृपया हो सके तो किसी शांत जगह पर चले जाइए, और अपना माइक्रोफ़ोन और स्पीकर जाँच लीजिए। तैयार होने पर बता दीजिए, मैं आगे बढ़ूँगा।",
+    "hinglish": "Please हो सके तो किसी quiet जगह पर चले जाइए, और अपना microphone और speakers check कर लीजिए। Ready होने पर बता दीजिए, मैं आगे बढ़ूँगा।",
+}
+ENV_CONTINUE = {
+    "en": "Understood. We'll continue now; please do your best to keep background noise down, and tell me if you can't hear me.",
+    "hi": "ठीक है। हम अब आगे बढ़ते हैं; कृपया आसपास का शोर कम रखने की कोशिश कीजिए, और अगर मेरी आवाज़ न आए तो बता दीजिए।",
+    "hinglish": "Understood। हम अब आगे बढ़ते हैं; please आसपास का noise कम रखने की कोशिश कीजिए, और अगर मेरी आवाज़ न आए तो बता दीजिए।",
+}
+ENV_RETRY_ASK = {
+    "en": "Sorry, I didn't catch that. Are you in a quiet place, and can you hear me clearly?",
+    "hi": "माफ़ कीजिए, मैं समझ नहीं पाया। क्या आप शांत जगह पर हैं, और क्या मेरी आवाज़ साफ़ सुनाई दे रही है?",
+    "hinglish": "Sorry, मैं समझ नहीं पाया। क्या आप quiet जगह पर हैं, और क्या मेरी आवाज़ clearly सुनाई दे रही है?",
+}
+MAIN_LEAD = {
+    "en": "Thank you. Let's move on to the main part of the interview.",
+    "hi": "धन्यवाद। अब हम इंटरव्यू के मुख्य हिस्से पर चलते हैं।",
+    "hinglish": "Thank you। अब हम interview के main part पर चलते हैं।",
+}
+
+
+def introduction(language: str | None, name: str = "", role: str = "", interviewer: str = "Aarav",
+                 facts: dict | None = None) -> str:
+    """The personalised opening. Only facts that were verified against the resume (interview_flow.profile_facts) are
+    mentioned; a missing fact is left out, never guessed. It ends with the clarification question."""
+    lang = _lang(language)
+    facts = facts or {}
+    name = _clean(name, 60)
+    role = _clean(role, 60)
+    text = _INTRO_HEAD[lang].format(
+        name_part=f" {name}" if name else "", interviewer=_clean(interviewer, 30) or "Aarav",
+        role_part=_INTRO_ROLE[lang].format(role=role) if role else "")
+    noticed = []
+    if facts.get("project"):
+        noticed.append(_NOTICED_PROJECT[lang].format(value=_clean(facts["project"], 60)))
+    elif facts.get("skill"):
+        noticed.append(_NOTICED_SKILL[lang].format(value=_clean(facts["skill"], 60)))
+    if facts.get("company"):
+        noticed.append(_NOTICED_COMPANY[lang].format(value=_clean(facts["company"], 60)))
+    if noticed:
+        text += _INTRO_CV_NOTICED[lang].format(noticed=_AND[lang].join(noticed))
+    elif facts:
+        text += _INTRO_CV_ONLY[lang]
+    if facts.get("experience"):
+        text += _INTRO_EXPERIENCE[lang].format(value=_clean(facts["experience"], 30))
+    text += (_INTRO_PLAN_WITH_CV if facts else _INTRO_PLAN_NO_CV)[lang]
+    return text + CLARIFY_ASK[lang]
+
+
 def greeting(language: str | None, name: str = "", role: str = "", interviewer: str = "Aarav") -> str:
     lang = _lang(language)
     name = _clean(name, 60)
@@ -321,6 +479,10 @@ def fixed_phrases(language: str | None, *, essential_only: bool = False) -> list
     lines += [MOVE_ON[lang], READY_TO_BEGIN[lang], CLOSING[lang], EARLY_END[lang],
               UNSUPPORTED_LANGUAGE[lang], DIDNT_CATCH_LANGUAGE[lang], IDLE_NUDGE[lang], AUDIO_TROUBLE[lang],
               ACK_PRESENCE[lang], ACK_NEED_TIME[lang], PLEASE_CONTINUE[lang]]
+    lines += [READINESS_ASK[lang], CLARIFY_MORE[lang], ENV_ASK[lang]]
     if not essential_only:
-        lines += [SMALL_TALK_FOLLOWUP[lang], WELCOME_BACK[lang]]
+        lines += [SMALL_TALK_FOLLOWUP[lang], WELCOME_BACK[lang], CLARIFY_GO_AHEAD[lang], CLARIFY_RETRY[lang],
+                  CLARIFY_UNKNOWN[lang], CLARIFY_RESULT[lang], CLARIFY_LIMIT[lang], READINESS_NOT_READY[lang],
+                  READINESS_RETRY[lang], READINESS_WAIT[lang], RESUME_LEAD[lang], RESUME_NEXT[lang],
+                  ENV_RETRY[lang], ENV_CONTINUE[lang], ENV_RETRY_ASK[lang], MAIN_LEAD[lang]]
     return list(dict.fromkeys(lines))

@@ -12,6 +12,7 @@ from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Hea
 from pydantic import BaseModel
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from livekit import api as lk_api
 
@@ -29,9 +30,12 @@ from db import (
     REPORT_PENDING, REPORT_PROCESSING, REPORT_READY, REPORT_FAILED,
 )
 from resume_parser import extract_text_from_pdf, parse_resume
+import interview_flow as flow
+from topic_guard import is_duplicate_question
 import voice_settings
 from focus import build_focus_areas
 from intelligence_report import build_intelligence
+import planner as planner_module
 from planner import build_interview_plan, generate_dynamic_questions, warm_question_bank_embeddings
 from scoring import (score_answer_content, score_communication, aggregate_final_score, generate_overall_summary,
                      guard_recommendation, evaluation_status)
@@ -240,6 +244,54 @@ def put_voice_provider(body: VoiceProviderUpdate, x_actor: str = Header(""), db:
     return {**result, "message": "Voice provider updated successfully"}
 
 
+PERSONALIZED_QUESTIONS = (os.getenv("PERSONALIZED_QUESTIONS") or "true").strip().lower() not in ("0", "false", "no", "off")
+HISTORY_INTERVIEWS = int(os.getenv("QUESTION_HISTORY_INTERVIEWS") or 3)
+_NOT_REPEATABLE_TYPES = {"introduction", "candidate_introduction", "hr"}       # HR's own wording is asked every time, on purpose
+
+
+def _recent_question_history(db: Session, cand: Candidate, role_id: str) -> tuple[list[str], set[str]]:
+    """Questions this person was recently asked for this same role (same candidate record, or the same email on this role),
+    so a re-attempt does not simply replay them. Used only to AVOID repeats; nothing from it is ever shown to anyone."""
+    ids = {cand.id}
+    if cand.email:
+        ids |= {row[0] for row in db.query(Candidate.id).filter(func.lower(Candidate.email) == cand.email.lower()).all()}
+    plans = [row[0] for row in db.query(Interview.plan).filter(Interview.role_id == role_id, Interview.candidate_id.in_(ids))
+             .order_by(Interview.created_at.desc()).limit(HISTORY_INTERVIEWS).all()]
+    texts, qids = [], set()
+    for plan in plans:
+        for q in (plan or {}).get("questions", []):
+            if q.get("type") in _NOT_REPEATABLE_TYPES or not q.get("question_text"):
+                continue
+            texts.append(q["question_text"])
+            qids.add(q["id"])
+    return texts, qids
+
+
+def _dynamic_questions_for(db: Session, role: Role, cand: Candidate, experience_level: str, avoid_texts: list[str]) -> list[dict]:
+    """The role-specific scenario questions for ONE interview.
+
+    Normally a fresh set written for this candidate's evidence, level and role, different from what they were recently
+    asked (same competencies and difficulty as everyone else, so results stay comparable). If generation fails, the
+    interview still gets a role-level set - cached per ROLE, never per candidate - and the failure is logged. A
+    candidate-specific set is stored only inside that candidate's own interview plan, so it cannot reach anyone else."""
+    if PERSONALIZED_QUESTIONS:
+        try:
+            return planner_module.generate_personalized_questions(
+                role.name, role.competencies, cand.evidence_profile or {}, 2,
+                experience_level=experience_level, avoid_texts=avoid_texts)
+        except Exception:  # noqa: BLE001 - logged; the role-level set below is the controlled fallback
+            logger.warning("personalised question generation failed for interview of role=%s: using the role-level set",
+                           role.id, exc_info=True)
+    if role.generated_questions is None:
+        try:
+            role.generated_questions = generate_dynamic_questions(role.name, role.competencies, count=2)
+        except Exception:
+            role.generated_questions = []
+        db.commit()
+    fresh = [q for q in role.generated_questions if not is_duplicate_question(q.get("question_text", ""), avoid_texts, 0.6)]
+    return fresh or role.generated_questions
+
+
 @app.post("/v1/interviews", dependencies=[Depends(require_service_key)])
 def create_interview(candidate_id: str = Form(...), role_id: str = Form(...),
                       duration_minutes: int = Form(30),
@@ -269,15 +321,8 @@ def create_interview(candidate_id: str = Form(...), role_id: str = Form(...),
     except voice_settings.VoiceSettingsError as exc:
         raise HTTPException(exc.status, exc.message)
 
-    # Generate this role's scenario questions once and cache them, so every candidate who
-    # interviews for the same role faces the same questions — standardized questions are a
-    # core fairness practice for comparing candidates against each other on equal footing.
-    if role.generated_questions is None:
-        try:
-            role.generated_questions = generate_dynamic_questions(role.name, role.competencies, count=2)
-        except Exception:
-            role.generated_questions = []
-        db.commit()
+    avoid_texts, avoid_ids = _recent_question_history(db, cand, role_id)
+    dynamic_questions = _dynamic_questions_for(db, role, cand, experience_level.strip()[:80], avoid_texts)
 
     plan = build_interview_plan(
         role_competencies=role.competencies,
@@ -285,9 +330,11 @@ def create_interview(candidate_id: str = Form(...), role_id: str = Form(...),
         evidence_profile=cand.evidence_profile or {},
         min_questions=4,
         max_questions=7,
-        cached_dynamic_questions=role.generated_questions,
+        cached_dynamic_questions=dynamic_questions,
         hr_questions=hr_question_list,
         focus_areas=focus_list,
+        avoid_ids=avoid_ids,
+        avoid_texts=avoid_texts,
     )
 
     extra = {}
@@ -358,6 +405,7 @@ def get_agent_context(interview_id: str, db: Session = Depends(get_db)):
 
 
 def _agent_view(interview) -> dict:
+    candidate = interview.candidate
     return {
         "id": interview.id, "status": interview.status, "room_name": interview.room_name,
         "plan": interview.plan, "candidate": interview.candidate.name, "role": interview.role.name,
@@ -374,6 +422,9 @@ def _agent_view(interview) -> dict:
         "voice": {"gender": interview.voice_gender, "speaker": interview.voice_speaker, "pace": interview.voice_pace},
         "voice_provider": interview.voice_provider,
         "progress": interview.progress,
+        # What the interviewer may say it noticed in this candidate's CV - only items verified against the resume text,
+        # never the resume itself. Scoped to this interview's own candidate row.
+        "candidate_profile": flow.profile_facts(candidate.evidence_profile, candidate.resume_text),
     }
 
 
@@ -399,7 +450,8 @@ def set_interview_voice(interview_id: str, voice_gender: str = Form(""), voice_s
 
 @app.post("/v1/interviews/{interview_id}/progress", dependencies=[Depends(require_service_key)])
 def record_progress(interview_id: str, question_index: int = Form(...), followup_count: int = Form(0),
-                     small_talk_done: int = Form(0), phase: str = Form(""), db: Session = Depends(get_db)):
+                     small_talk_done: int = Form(0), phase: str = Form(""), stage: str = Form(""),
+                     readiness: int = Form(0), db: Session = Depends(get_db)):
     """The agent reports where the interview is after every transition, so the server holds the
     authoritative progress and a restarted agent worker resumes instead of starting over. Progress
     only ever moves forward: a late write from a stale worker can't rewind a newer one."""
@@ -410,15 +462,19 @@ def record_progress(interview_id: str, question_index: int = Form(...), followup
         raise HTTPException(409, "INTERVIEW_ALREADY_COMPLETED")
     current = interview.progress or {}
     prev_q = current.get("question_index", 0)
+    stage = stage if stage in flow.STAGE_ORDER else ""
     stale = current and (
         question_index < prev_q
         or (question_index == prev_q and (small_talk_done < current.get("small_talk_done", 0)
-                                          or followup_count < current.get("followup_count", 0)))
+                                          or followup_count < current.get("followup_count", 0)
+                                          # the opening only moves forward too: a late write cannot send it back a stage
+                                          or (stage and flow.stage_rank(stage) < flow.stage_rank(current.get("stage")))))
     )
     if stale:
         return {"accepted": False, "progress": current}
     interview.progress = {"question_index": max(0, question_index), "followup_count": max(0, followup_count),
-                          "small_talk_done": max(0, small_talk_done), "phase": phase[:40]}
+                          "small_talk_done": max(0, small_talk_done), "phase": phase[:40], "stage": stage,
+                          "readiness": 1 if readiness else 0}
     db.commit()
     return {"accepted": True, "progress": interview.progress}
 

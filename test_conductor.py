@@ -82,7 +82,7 @@ class Harness:
         self._evaluations = list(evaluations)
         self.provider = FakeProvider(*composer_responses)
 
-        def judge(question_text, expected, answer, *, topic="", role=""):
+        def judge(question_text, expected, answer, *, topic="", role="", **context):
             self.judge_calls.append(answer)
             return self._evaluations.pop(0) if self._evaluations else Evaluation(failed=True, uncertainty=1.0)
 
@@ -391,15 +391,19 @@ async def test_opening_greets_by_name_and_role_without_any_llm(harness_factory):
     assert h.provider.calls == []
 
 
-async def test_small_talk_then_candidate_intro_then_the_real_questions(harness_factory):
-    h = small_talk_harness(harness_factory, evaluations=[strong()], composer_responses=[lead_in("")])
+async def test_opening_runs_clarification_readiness_background_question_environment_check_then_the_real_questions(harness_factory):
+    h = small_talk_harness(harness_factory, evaluations=[strong()], composer_responses=[lead_in(""), lead_in("")])
     await h.conductor.start()
-    r1 = await h.say("I'm doing well, thanks.")
-    assert r1.action == "SMALL_TALK" and h.runner.idx == 0
+    r1 = await h.say("No questions.")
+    assert r1.text == refusals.READINESS_ASK["en"] and h.runner.idx == 0
     r2 = await h.say("Yes, ready to start.")
+    # no resume on file: the generic background question is the single opening question
     assert r2.action == "NEXT_QUESTION" and CAND_INTRO["question_text"] in r2.text and h.runner.idx == 1
     r3 = await h.say("I build backend services in Java and I enjoy distributed systems and databases.")
-    assert Q1["question_text"] in r3.text and h.runner.idx == 2
+    assert r3.text.startswith("Thank you, that helps me understand your background")      # the existing quiet-place check
+    assert h.runner.stage == "ENVIRONMENT_CHECKS" and h.runner.idx == 2
+    r4 = await h.say("Yes, it is quiet here.")
+    assert Q1["question_text"] in r4.text and h.runner.idx == 2 and h.runner.stage == "MAIN_INTERVIEW"
     assert h.judge_calls == []                                          # intro/rapport is never scored
 
 
@@ -503,17 +507,17 @@ async def test_interviewer_introduces_itself_by_name_and_says_the_conversation_i
     h = small_talk_harness(harness_factory)
     await h.conductor.start()
     text = h.spoken[0].text
-    assert "My name is Aarav" in text and "AI interviewer" in text and "two-way" in text
-    assert text.rstrip().endswith("?")                                  # hands the turn to the candidate
+    assert "My name is Aarav" in text and "conducting your interview" in text and "Asha" in text
+    assert text.rstrip().endswith("?")                                  # hands the turn to the candidate (clarification question)
 
 
 async def test_candidate_can_ask_how_long_the_interview_is_before_starting(harness_factory):
     h = small_talk_harness(harness_factory, evaluations=[strong()], composer_responses=[lead_in("")], duration_minutes=25)
     await h.conductor.start()
-    await h.say("I'm good, thanks.")
     out = await h.say("How long will this interview take?")
-    assert out.action == "SMALL_TALK" and "25 minutes" in out.text and "begin" in out.text.lower()
+    assert out.action == "SMALL_TALK" and "25 minutes" in out.text and out.text.endswith(refusals.CLARIFY_MORE["en"])
     assert h.runner.idx == 0 and h.provider.calls == []                 # answered from facts, no LLM, no question revealed
+    await h.say("No more questions.")
     out = await h.say("Yes, let's start.")
     assert out.action == "NEXT_QUESTION" and h.runner.idx == 1
 
@@ -521,7 +525,6 @@ async def test_candidate_can_ask_how_long_the_interview_is_before_starting(harne
 async def test_process_questions_never_leak_interview_content(harness_factory):
     h = small_talk_harness(harness_factory)
     await h.conductor.start()
-    await h.say("I'm good, thanks.")
     out = await h.say("What will you ask me in the interview?")
     assert Q1["question_text"] not in out.text and Q2["question_text"] not in out.text
 
@@ -556,9 +559,10 @@ async def test_the_new_language_is_used_for_everything_after_the_switch(harness_
 
 async def test_during_small_talk_the_switch_only_confirms(harness_factory):
     h = harness_factory(small_talk_rounds=2)
-    spoken = await h.say("Please speak in Hinglish")
+    await h.say("Please speak in Hinglish")
     assert h.conductor.language == "hinglish"
-    assert spoken.text == refusals.LANGUAGE_SWITCHED["hinglish"]          # no question is asked yet
+    assert h.spoken[-2].text == refusals.LANGUAGE_SWITCHED["hinglish"]    # no question is asked yet...
+    assert h.spoken[-1].text == refusals.CLARIFY_MORE["hinglish"]         # ...the pending doubt prompt is simply put back
 
 
 async def test_a_failure_while_retuning_speech_does_not_end_the_interview(harness_factory):

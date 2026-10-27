@@ -26,3 +26,14 @@ def hermetic_service_key(monkeypatch):
     monkeypatch.setattr(api, "AGENT_SERVICE_KEY", "")
     monkeypatch.setattr(runner, "AGENT_SERVICE_KEY", "", raising=False)
     monkeypatch.setattr(runner, "_AUTH_HEADERS", {}, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def hermetic_personalised_questions(monkeypatch):
+    """Personalised question generation calls an LLM: tests never reach one. It fails by default (which exercises the
+    controlled role-level fallback); tests that want generated questions install their own stub."""
+    import planner
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("no LLM in tests")
+    monkeypatch.setattr(planner, "generate_personalized_questions", unavailable)
