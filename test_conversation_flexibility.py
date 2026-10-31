@@ -161,3 +161,49 @@ async def test_the_opening_never_puts_a_question_on_the_candidates_screen(harnes
     await h.conductor.start()
     await h.say("No questions.")
     assert shown and all(p["question_id"] is None for p in shown)
+
+
+# ---------------------------------------------------------------------------- ending is confirmed, and only when asked for
+@pytest.mark.parametrize("text", [
+    "I don't want to end the interview", "why would I stop the interview", "I would never quit this interview",
+    "no need to end the interview", "what happens if I end the interview"])
+def test_mentioning_ending_is_not_asking_to_end(text):
+    assert classify(text).intent != Intent.END_INTERVIEW
+
+
+@pytest.mark.parametrize("text", ["I want to end the interview", "please stop the interview", "can we stop here", "interview khatam karo"])
+def test_a_real_request_to_end_is_recognised(text):
+    assert classify(text).intent == Intent.END_INTERVIEW
+
+
+async def test_a_spoken_request_to_end_asks_once_and_then_ends_on_yes(harness_factory):
+    h = harness_factory(questions=(Q1, Q2), small_talk_rounds=0)
+    asked = await h.say("I want to end the interview")
+    assert asked.text == refusals.END_CONFIRM["en"] and not h.runner.terminal and not h.posted("complete")
+    done = await h.say("Yes")
+    assert done.action == "INTERVIEW_COMPLETE" and h.runner.terminal
+
+
+async def test_saying_no_carries_on_with_the_same_question(harness_factory):
+    h = harness_factory(questions=(Q1, Q2), small_talk_rounds=0)
+    await h.say("I want to end the interview")
+    out = await h.say("No, sorry, carry on")
+    assert out.text.startswith(refusals.END_CANCELLED["en"]) and Q1["question_text"] in out.text
+    assert not h.runner.terminal and h.runner.idx == 0
+    assert all(t.get("intent") != "end_interview" for t in h.posted("turns") if t.get("speaker") == "candidate")   # not recorded as an early end
+
+
+async def test_carrying_on_after_the_question_is_not_a_confirmation(harness_factory):
+    h = harness_factory(questions=(Q1, Q2), small_talk_rounds=0, evaluations=[strong()], composer_responses=[lead_in("")], depth_probe=False)
+    await h.say("I want to end the interview")
+    out = await h.say("A hashmap hashes keys into buckets and handles collisions by chaining and resizing.")
+    assert not h.runner.terminal and h.judge_calls                      # treated as the answer it was
+
+
+async def test_the_confirmation_is_asked_in_the_opening_too(harness_factory):
+    h = opening_harness(harness_factory)
+    await h.conductor.start()
+    asked = await h.say("I need to leave")
+    assert asked.text == refusals.END_CONFIRM["en"] and not h.runner.terminal
+    out = await h.say("No")
+    assert out.text.startswith(refusals.END_CANCELLED["en"]) and h.runner.stage == flow.CLARIFICATION

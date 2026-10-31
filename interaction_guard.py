@@ -109,6 +109,11 @@ _INJECTION = _p(
     r"\bmujhe\s+(?:full|poore|pure|100|sau)\s+(?:marks|number|score)",
 )
 
+_NOT_ENDING = re.compile(
+    r"\b(?:don'?t|do\s+not|doesn'?t|won'?t|wouldn'?t|never|not|no\s+need|why\s+(?:would|should|do)|without|dont|nahi|nahin|मत|नहीं)\b"
+    r"(?:\W+\w+){0,4}?\W+(?:end|stop|finish|terminate|quit|exit|ending|stopping|finishing)\b"
+    r"|\b(?:what\s+happens\s+if|if\s+i)\b.{0,20}\b(?:end|stop|quit|exit)\b", re.IGNORECASE)
+
 _END_INTERVIEW = _p(
     r"\b(?:end|stop|finish|terminate|quit|exit)\s+(?:the\s+|this\s+|my\s+)?(?:interview|session|meeting)\b",
     r"\bi\s+(?:want|wish|would\s+like|'d\s+like)\s+to\s+(?:stop|end|withdraw|quit|leave|exit)\b",
@@ -406,7 +411,9 @@ def classify(text: str, *, context: "Iterable[str] | None" = None) -> Classifica
 
     if words <= MAX_CONTROL_WORDS:
         rule = _matches(_END_INTERVIEW, text)
-        if rule:
+        # "I don't want to end the interview", "why would I stop the interview?", "without ending it": mentioning ending is
+        # not asking to end.
+        if rule and not _NOT_ENDING.search(text):
             return Classification(Intent.END_INTERVIEW, rule)
     if words <= MAX_SKIP_WORDS:
         rule = _matches(_SKIP, text)

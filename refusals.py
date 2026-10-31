@@ -217,6 +217,15 @@ LANGUAGE_SWITCHED = {
     "hi": "ज़रूर, अब हम हिंदी में बात करेंगे।",
     "hinglish": "Sure, अब हम Hinglish में बात करेंगे।",
 }
+# Ending is not undone, and a speech recogniser mishears: ask once before closing the interview on a spoken request.
+END_CONFIRM = {
+    "en": "Just to be sure: would you like to end the interview now? Say yes to end it, or no to carry on.",
+    "hi": "बस पक्का करने के लिए: क्या आप इंटरव्यू अभी समाप्त करना चाहते हैं? समाप्त करने के लिए हाँ कहिए, या जारी रखने के लिए ना कहिए।",
+    "hinglish": "बस sure होने के लिए: क्या आप interview अभी end करना चाहते हैं? End करने के लिए yes कहिए, या जारी रखने के लिए no कहिए।",
+}
+END_CANCELLED = {
+    "en": "No problem, let's carry on.", "hi": "कोई बात नहीं, चलिए जारी रखते हैं।", "hinglish": "कोई बात नहीं, चलिए carry on करते हैं।",
+}
 # The candidate asked for the language the interview is already in ("can you speak English?"): say so, never just re-read the question.
 LANGUAGE_ALREADY = {
     "en": "Yes, we're already speaking in English. If you'd like Hindi or Hinglish instead, just tell me and I'll switch.",
@@ -484,7 +493,7 @@ def fixed_phrases(language: str | None, *, essential_only: bool = False) -> list
         lines = [text for variants in refusals.values() for text in variants]
     lines += [MOVE_ON[lang], READY_TO_BEGIN[lang], CLOSING[lang], EARLY_END[lang],
               UNSUPPORTED_LANGUAGE[lang], DIDNT_CATCH_LANGUAGE[lang], IDLE_NUDGE[lang], AUDIO_TROUBLE[lang],
-              ACK_PRESENCE[lang], ACK_NEED_TIME[lang], PLEASE_CONTINUE[lang], LANGUAGE_ALREADY[lang]]
+              ACK_PRESENCE[lang], ACK_NEED_TIME[lang], PLEASE_CONTINUE[lang], LANGUAGE_ALREADY[lang], END_CONFIRM[lang], END_CANCELLED[lang]]
     lines += [READINESS_ASK[lang], CLARIFY_MORE[lang], ENV_ASK[lang]]
     if not essential_only:
         lines += [SMALL_TALK_FOLLOWUP[lang], WELCOME_BACK[lang], CLARIFY_GO_AHEAD[lang], CLARIFY_RETRY[lang],

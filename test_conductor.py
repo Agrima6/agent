@@ -322,13 +322,15 @@ async def test_empty_or_noise_turns_get_a_gentle_prompt_not_a_followup(harness_f
 
 async def test_end_interview_request_closes_politely_and_completes_exactly_once(harness_factory):
     h = harness_factory()
-    out = await h.say("I want to end the interview")
+    asked = await h.say("I want to end the interview")
+    assert asked.text == refusals.END_CONFIRM["en"] and not h.runner.terminal       # one confirmation first
+    out = await h.say("Yes, end it")
     assert out.action == "INTERVIEW_COMPLETE" and out.interruptible is False
     assert "close this window" in out.text
     assert h.runner.terminal and len(h.posted("complete")) == 1 or [p for p, _ in h.posts].count("complete") == 1
     assert h.judge_calls == []
     await h.conductor.handle_candidate_turn("hello?")                   # anything after the end is ignored
-    assert [p for p, _ in h.posts].count("complete") == 1 and len(h.spoken) == 1
+    assert [p for p, _ in h.posts].count("complete") == 1 and len(h.spoken) == 2
 
 
 async def test_finishing_the_last_question_speaks_the_closing_and_completes(harness_factory):
@@ -419,7 +421,8 @@ async def test_injection_during_small_talk_is_refused_and_does_not_advance(harne
 async def test_ending_during_small_talk_is_respected(harness_factory):
     h = small_talk_harness(harness_factory)
     await h.conductor.start()
-    out = await h.say("Actually I want to end the interview")
+    await h.say("Actually I want to end the interview")
+    out = await h.say("Yes")
     assert out.action == "INTERVIEW_COMPLETE" and h.runner.terminal
 
 

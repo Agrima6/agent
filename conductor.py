@@ -54,6 +54,19 @@ _DURATION_Q = re.compile(r"\b(how long|how much time|duration|how many minutes|k
 _FORMAT_Q = re.compile(r"\b(how (?:does|will|is) (?:this|the interview|it) (?:work|go|going)|what (?:is|are) the (?:format|process|rules)|how does the interview|kaise (?:hoga|chalega)|कैसे (?:होगा|चलेगा))\b", re.I)
 
 
+_END_YES = re.compile(r"^\W*(?:yes|yeah|yep|yup|sure|ok|okay|please|end(?:\s+it)?|stop|go\s+ahead|that'?s\s+right|correct|confirm|haan|han|ha|ji|हाँ|हां|जी|ठीक\s+है)\b", re.I)
+_END_NO = re.compile(r"^\W*(?:no|nope|nah|don'?t|do\s+not|not\s+yet|continue|keep\s+going|carry\s+on|never\s*mind|sorry|nahi|nahin|नहीं|नही|मत)\b", re.I)
+
+
+def _end_verdict(text: str) -> str | None:
+    """The answer to "would you like to end the interview?": YES, NO, or None when they simply went on talking."""
+    if _END_NO.search(text or ""):
+        return "NO"
+    if _END_YES.search(text or ""):
+        return "YES"
+    return None
+
+
 def _process_question(text: str) -> str | None:
     """Which question ABOUT THE INTERVIEW PROCESS (not its content) the candidate asked, if any."""
     if _DURATION_Q.search(text or ""):
@@ -120,6 +133,7 @@ class InterviewConductor:
         # acknowledgement. "Can you repeat that?" repeats this, never "Sorry, I didn't catch that".
         self._last_prompt = ""
         self._filler_streak = 0                   # consecutive recogniser hallucinations ("Thank you.") heard from silence
+        self._pending_end = False                 # the candidate asked to end by voice and has been asked to confirm
         # Normalised texts of turns queued or being handled right now: a second end-of-turn carrying the same words
         # while the first is still in flight is one answer reported twice (a duplicated end-of-turn event, or a
         # "done speaking" press racing the detector) - it must not be answered twice or advance twice.
@@ -389,8 +403,24 @@ class InterviewConductor:
         else:
             self._filler_streak = 0
 
+        if self._pending_end:
+            self._pending_end = False
+            verdict = _end_verdict(text)
+            if verdict == "YES":
+                return await self._end_early(text)
+            if verdict == "NO":
+                self._record_candidate(text, "end_cancelled")
+                again = self._stage_prompt() if r.in_preflight else (r.last_question_text or q.get("question_text", ""))
+                return await self._say(Speech(f"{refusals.END_CANCELLED[self.language]} {again}".strip(), "REPEAT",
+                                              PREFLIGHT_QUESTION_ID if r.in_preflight else q["id"], q.get("question_text", "")))
+            # anything else: they carried on talking, so it was not a request to end - handled below like any other turn
+
         if intent == Intent.END_INTERVIEW:
-            return await self._end_early(text)
+            # Ending is final and the recogniser mishears: ask once. (The on-screen End button has its own confirmation.)
+            self._record_candidate(text, "end_request")
+            self._pending_end = True
+            return await self._say(Speech(refusals.END_CONFIRM[self.language], "SMALL_TALK",
+                                          PREFLIGHT_QUESTION_ID if r.in_preflight else q["id"], q.get("question_text", "")))
         if intent in (Intent.PRESENCE_CHECK, Intent.NEED_TIME):
             return await self._acknowledge(intent, text)
         if r.in_preflight:
