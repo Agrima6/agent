@@ -318,7 +318,8 @@ async def entrypoint(ctx: JobContext):
             coverage_threshold=data.get("coverage_threshold", 0.7),
             max_followups_per_question=data.get("max_followups_per_question", 2),
             depth_probe_enabled=data.get("depth_probe_enabled", True),
-            duration_minutes=data.get("duration_minutes") or 30)
+            duration_minutes=data.get("duration_minutes") or 30,
+            candidate_facts=data.get("candidate_profile") or {})
         resumed = runner.restore(data.get("progress"))
         logger.info("interview start id=%s language=%s role=%r plain_language=%s resumed=%s voice=%s",
                     interview_id, LANGUAGE_CONFIGS[language]["label"], role_name, plain_language, resumed,

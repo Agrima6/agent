@@ -32,6 +32,7 @@ import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
+import interview_flow as flow
 import refusals
 from composer import ComposeRequest, Composed, Composer
 from language_detect import LanguageFollower
@@ -44,6 +45,8 @@ from runner import InterviewRunner, question_topic
 
 import turn_trace
 from turn_state import TurnPhase, TurnStateMachine
+
+PREFLIGHT_QUESTION_ID = "p_intro"      # everything said during the opening (greeting, doubts, readiness, environment check) is filed here
 
 logger = logging.getLogger("conductor")
 
@@ -151,20 +154,45 @@ class InterviewConductor:
         if self.language != "en":
             await self._localize_upcoming(self.language, wait=False)    # background: questions are ready before they are asked
         async with self._lock:
-            if r.resumed and r.current_question is not None:
-                q = r.current_question
-                composed = await self._compose(ComposeRequest(
-                    action=Action.NEXT_QUESTION, question=q, next_question=q, language=self.language,
-                    role=self.role, experience_level=self.experience_level, plain_language=self.plain_language))
-                r.last_question_text = composed.question_only or composed.text
-                r.asked_texts.append(q["question_text"])
-                text = f"{refusals.WELCOME_BACK[self.language]} {composed.text}"
-                await self._say(Speech(text, "NEXT_QUESTION", q["id"], q["question_text"]))
-                r.persist_progress_nowait("resumed")
-                return
-            r.persist_progress_nowait("greeting")
-            await self._say(Speech(refusals.greeting(self.language, r.candidate_name, self.role, self.interviewer_name), "GREETING",
-                                   "p_intro"))
+            if r.resumed:
+                return await self._resume()
+            if r.stage == flow.MAIN_INTERVIEW:        # opening disabled (small_talk_rounds=0): the plain greeting, then questions
+                r.persist_progress_nowait("greeting")
+                return await self._say(Speech(refusals.greeting(self.language, r.candidate_name, self.role, self.interviewer_name),
+                                              "GREETING", PREFLIGHT_QUESTION_ID))
+            # Stage 1: the personalised introduction, which ends with the clarification question (stage 2 begins).
+            r.set_stage(flow.INTRODUCTION)
+            r.persist_progress_nowait("introduction")
+            self._event("stage", stage=flow.INTRODUCTION)
+            await self._say(Speech(refusals.introduction(self.language, r.candidate_name, self.role, self.interviewer_name,
+                                                         r.candidate_facts), "GREETING", PREFLIGHT_QUESTION_ID))
+            r.set_stage(flow.CLARIFICATION)
+            r.persist_progress_nowait("clarification")
+
+    async def _resume(self) -> None:
+        """A restarted worker (or a reconnect) picks up where the interview was. It never introduces itself again."""
+        r = self.runner
+        lead = refusals.WELCOME_BACK[self.language]
+        if r.stage in (flow.CLARIFICATION, flow.INTRODUCTION):
+            r.set_stage(flow.CLARIFICATION)
+            spoken = f"{lead} {refusals.CLARIFY_MORE[self.language]}"
+        elif r.stage == flow.READINESS:
+            spoken = f"{lead} {refusals.READINESS_ASK[self.language]}"
+        elif r.stage == flow.ENVIRONMENT_CHECK:
+            spoken = f"{lead} {refusals.ENV_ASK[self.language]}"
+        else:
+            q = r.current_question
+            if q is None:
+                return await self._finish()
+            composed = await self._compose(ComposeRequest(
+                action=Action.NEXT_QUESTION, question=q, next_question=q, language=self.language,
+                role=self.role, experience_level=self.experience_level, plain_language=self.plain_language))
+            r.last_question_text = composed.question_only or composed.text
+            r.asked_texts.append(q["question_text"])
+            r.persist_progress_nowait("resumed")
+            return await self._say(Speech(f"{lead} {composed.text}", "NEXT_QUESTION", q["id"], q["question_text"]))
+        r.persist_progress_nowait("resumed")
+        await self._say(Speech(spoken, "SMALL_TALK", PREFLIGHT_QUESTION_ID))
 
     async def handle_candidate_turn(self, text: str) -> None:
         normalised = " ".join((text or "").lower().split())
@@ -346,8 +374,8 @@ class InterviewConductor:
             return await self._end_early(text)
         if intent in (Intent.PRESENCE_CHECK, Intent.NEED_TIME):
             return await self._acknowledge(intent, text)
-        if r.small_talk_done < r.small_talk_rounds:
-            return await self._small_talk_turn(text, classification, generation)
+        if r.in_preflight:
+            return await self._preflight_turn(text, classification, generation)
 
         if intent == Intent.SKIP:
             self._record_candidate(text, Intent.SKIP)
@@ -391,8 +419,21 @@ class InterviewConductor:
         r = self.runner
         if r.terminal or self._lock.locked() or r.state is None or r.current_question is None:
             return
-        if r.small_talk_done < r.small_talk_rounds or self.turns.phase != TurnPhase.QUESTION_DELIVERED:
-            return                                    # before the interview proper, or mid-decision: not idle
+        if r.in_preflight:
+            # Silence during the opening: ask once for a clear answer (never counted, never treated as readiness).
+            if r.preflight_nudged >= 1 or self.turns.phase != TurnPhase.QUESTION_DELIVERED:
+                return
+            r.preflight_nudged += 1
+            retry = {flow.READINESS: refusals.READINESS_RETRY, flow.ENVIRONMENT_CHECK: refusals.ENV_RETRY_ASK}.get(
+                r.stage, refusals.CLARIFY_RETRY)
+            self._event("idle_nudge", count=r.preflight_nudged, stage=r.stage)
+            async with self._lock:
+                if r.terminal:
+                    return
+                await self._say_preflight(retry[self.language], "NUDGE")
+            return
+        if self.turns.phase != TurnPhase.QUESTION_DELIVERED:
+            return                                    # mid-decision: not idle
         state = r.state
         if state.idle_nudges >= 2:
             return
@@ -411,7 +452,7 @@ class InterviewConductor:
         q = r.current_question
         self._record_candidate(text, Intent.UNSUPPORTED_LANGUAGE)
         self._event("unsupported_language", requested=requested)
-        in_question = q is not None and r.small_talk_done >= r.small_talk_rounds and q.get("question_text")
+        in_question = q is not None and not r.in_preflight and q.get("question_text")
         if requested:
             spoken = refusals.UNSUPPORTED_LANGUAGE[self.language]
             if in_question:
@@ -432,8 +473,9 @@ class InterviewConductor:
         r = self.runner
         q = r.current_question
         self._record_candidate(text, intent)
-        if r.small_talk_done < r.small_talk_rounds:
-            spoken = self._last_spoken or refusals.greeting(self.language, r.candidate_name, self.role, self.interviewer_name)
+        if r.in_preflight:
+            spoken = self._last_spoken or refusals.introduction(self.language, r.candidate_name, self.role, self.interviewer_name,
+                                                                 r.candidate_facts)
         else:
             spoken = r.last_question_text or (q or {}).get("question_text", "")
         await self._say(Speech(spoken, "REPEAT", (q or {}).get("id", ""), (q or {}).get("question_text", "")))
@@ -454,43 +496,153 @@ class InterviewConductor:
             self._event("noise_turn", count=state.noise_count)
             return await self._say(Speech(spoken, "REDIRECT", (q or {}).get("id", ""), (q or {}).get("question_text", "")))
         state.non_answer_count += 1
-        if state.non_answer_count >= MAX_CONSECUTIVE_NON_ANSWERS and r.small_talk_done >= r.small_talk_rounds:
+        if state.non_answer_count >= MAX_CONSECUTIVE_NON_ANSWERS and not r.in_preflight:
             logger.info("moving on after %d non-answers interview=%s question=%s", state.non_answer_count,
                         r.interview_id, state.question_id)
             return await self._advance_and_ask(generation, [], prefix=refusals.MOVE_ON[self.language])
         await self._say(Speech(self.picker.pick(intent, self.language), "REDIRECT", (q or {}).get("id", ""),
                                (q or {}).get("question_text", "")))
 
-    # ---------------------------------------------------------------- small talk
-    async def _small_talk_turn(self, text: str, classification: Classification, generation: int) -> None:
+    # ---------------------------------------------------------------- the structured opening
+    def _stage_prompt(self) -> str:
+        """What the interviewer is waiting for an answer to, right now (used to resume and after a language switch)."""
+        L = self.language
+        return {flow.CLARIFICATION: refusals.CLARIFY_MORE, flow.INTRODUCTION: refusals.CLARIFY_MORE,
+                flow.READINESS: refusals.READINESS_ASK, flow.ENVIRONMENT_CHECK: refusals.ENV_ASK}.get(
+            self.runner.stage, refusals.CLARIFY_MORE)[L]
+
+    async def _say_preflight(self, text: str, action: str = "SMALL_TALK") -> None:
+        await self._say(Speech(text, action, PREFLIGHT_QUESTION_ID))
+
+    def _record_preflight(self, text: str, intent: str) -> None:
+        self.runner.record_turn_nowait(PREFLIGHT_QUESTION_ID, "candidate", self._turn_original or text, intent=intent)
+
+    def _enter_stage(self, stage: str) -> None:
         r = self.runner
+        previous = r.stage
+        r.set_stage(stage)
+        self._event("stage", stage=stage, previous=previous)
+        r.persist_progress_nowait(stage.lower())
+
+    def _clarification_answer(self, text: str) -> str:
+        """An answer to a doubt, only from what the interviewer is actually allowed to say. Anything else is said not to be
+        confirmable - never guessed."""
+        r = self.runner
+        L = self.language
+        topic = flow.clarification_topic(text)
+        if topic == "duration":
+            return refusals.PROCESS_ANSWERS["duration"][L].format(minutes=r.duration_minutes)
+        if topic == "format":
+            return refusals.PROCESS_ANSWERS["format"][L]
+        if topic == "role" and self.role:
+            return refusals.CLARIFY_ROLE[L].format(role=refusals._clean(self.role, 60))
+        if topic == "result":
+            return refusals.CLARIFY_RESULT[L]
+        return refusals.CLARIFY_UNKNOWN[L]
+
+    async def _preflight_turn(self, text: str, classification: Classification, generation: int) -> None:
+        r = self.runner
+        L = self.language
         intent = classification.intent
         if intent == Intent.REPEAT:
             return await self._repeat(text)
-        if intent in RESTRICTED_INTENTS or intent == Intent.EMPTY:
-            # Chatting about the weather or asking for a hint before the interview has even begun is
-            # harmless, but instructions aimed at the interviewer are not: refuse those only.
-            if intent in (Intent.PROMPT_INJECTION, Intent.EMPTY, Intent.REQUEST_ANSWER, Intent.REQUEST_HINT):
-                q = r.current_question
-                self._record_candidate(text, intent)
-                await self._say(Speech(self.picker.pick(intent, self.language), "REDIRECT", (q or {}).get("id", "")))
-                return
-        # Two-way: the candidate may ask how the interview works before it starts. Those are answered
-        # from facts the runner already holds (duration, format) - never anything about the questions.
-        topic = _process_question(text)
-        if topic and not getattr(self, "_process_answered", False):
-            self._process_answered = True
-            self._record_candidate(text, "small_talk")
-            answer = refusals.PROCESS_ANSWERS[topic][self.language].format(minutes=r.duration_minutes)
-            await self._say(Speech(f"{answer} {refusals.READY_TO_BEGIN[self.language]}", "SMALL_TALK", "p_intro"))
-            return
-        r.small_talk_done += 1
-        self._record_candidate(text, "small_talk")
-        if r.small_talk_done < r.small_talk_rounds:
-            r.persist_progress_nowait("small_talk")
-            await self._say(Speech(refusals.SMALL_TALK_FOLLOWUP[self.language], "SMALL_TALK", "p_intro"))
-            return
-        await self._advance_and_ask(generation, [])
+        if intent in (Intent.PROMPT_INJECTION, Intent.EMPTY, Intent.REQUEST_ANSWER, Intent.REQUEST_HINT):
+            # Instructions aimed at the interviewer and noise are refused/ignored exactly as before; a doubt about how the
+            # interview works is not one of these.
+            self._record_preflight(text, intent.value)
+            return await self._say_preflight(self.picker.pick(intent, L), "REDIRECT")
+
+        meaning = flow.interpret(r.stage, text)
+        self._event("preflight_turn", stage=r.stage, meaning=meaning)
+        self._record_preflight(text, f"preflight_{meaning.lower()}")
+
+        if r.stage == flow.ENVIRONMENT_CHECK:
+            return await self._environment_turn(meaning, generation)
+
+        # A doubt can be raised at any point before the questions start: it is answered, then the interviewer asks
+        # whether there is anything else. The interview does not begin while one is pending.
+        if meaning == "QUESTION":
+            if r.stage == flow.READINESS:
+                self._enter_stage(flow.CLARIFICATION)
+            r.clarifications += 1
+            if r.clarifications > flow.MAX_CLARIFICATIONS:
+                self._enter_stage(flow.READINESS)
+                return await self._say_preflight(f"{refusals.CLARIFY_LIMIT[L]} {refusals.READINESS_ASK[L]}")
+            r.unclear = 0
+            return await self._say_preflight(f"{self._clarification_answer(text)} {refusals.CLARIFY_MORE[L]}")
+        if meaning == "HAS_QUESTION":
+            return await self._say_preflight(refusals.CLARIFY_GO_AHEAD[L])
+
+        if r.stage in (flow.CLARIFICATION, flow.INTRODUCTION):
+            if meaning == "NO_QUESTIONS":
+                self._enter_stage(flow.READINESS)
+                return await self._say_preflight(refusals.READINESS_ASK[L])
+            if meaning == "READY":                         # "no questions, I'm ready": an explicit go-ahead
+                return await self._confirm_ready(generation)
+            if meaning == "NOT_READY":
+                self._enter_stage(flow.READINESS)
+                return await self._say_preflight(refusals.READINESS_NOT_READY[L])
+            r.unclear += 1                                 # unclear: ask once more, then move on to the readiness question
+            if r.unclear <= 1:
+                return await self._say_preflight(refusals.CLARIFY_RETRY[L])
+            self._enter_stage(flow.READINESS)
+            return await self._say_preflight(refusals.READINESS_ASK[L])
+
+        # READINESS
+        if meaning == "READY":
+            return await self._confirm_ready(generation)
+        if meaning == "NOT_READY":
+            return await self._say_preflight(refusals.READINESS_NOT_READY[L])
+        r.unclear += 1                                     # never inferred from silence or noise: wait for a clear yes
+        await self._say_preflight(refusals.READINESS_RETRY[L] if r.unclear <= flow.MAX_UNCLEAR else refusals.READINESS_WAIT[L])
+
+    async def _confirm_ready(self, generation: int) -> None:
+        """Readiness is explicit: only now do the resume questions start."""
+        r = self.runner
+        r.readiness_confirmed = True
+        self._enter_stage(flow.RESUME_QUESTIONS)
+        await self._advance_and_ask(generation, [], prefix=refusals.RESUME_LEAD[self.language], force=True)
+
+    async def _environment_turn(self, meaning: str, generation: int) -> None:
+        """The existing quiet-place check, now run after the resume questions. A "no" is given time to be fixed; after
+        MAX_ENV_RETRIES the interview continues anyway (as the previous flow did after any reply) and logs that it did."""
+        r = self.runner
+        L = self.language
+        if meaning == "ENV_OK":
+            r.env_resolved = True
+            return await self._begin_main(generation)
+        if meaning == "ENV_NO":
+            r.env_retries += 1
+            if r.env_retries <= flow.MAX_ENV_RETRIES:
+                return await self._say_preflight(refusals.ENV_RETRY[L])
+            r.env_resolved = False
+            self._event("environment_check_unresolved", retries=r.env_retries)
+            return await self._begin_main(generation, prefix=refusals.ENV_CONTINUE[L])
+        if meaning == "QUESTION":
+            return await self._say_preflight(f"{self._clarification_answer(self._turn_original or '')} {refusals.ENV_RETRY_ASK[L]}")
+        r.unclear += 1                                      # unclear: ask once more, then carry on like the previous flow
+        if r.unclear <= 1:
+            return await self._say_preflight(refusals.ENV_RETRY_ASK[L])
+        r.env_resolved = None
+        await self._begin_main(generation)
+
+    async def _begin_main(self, generation: int, prefix: str = "") -> None:
+        """The environment check is over: ask the first main-interview question."""
+        r = self.runner
+        q = r.current_question
+        self._enter_stage(flow.MAIN_INTERVIEW)
+        if q is None:
+            return await self._finish()
+        self._check(generation)
+        composed = await self._compose(ComposeRequest(
+            action=Action.NEXT_QUESTION, question=q, next_question=q, language=self.language, role=self.role,
+            experience_level=self.experience_level, plain_language=self.plain_language))
+        self._check(generation)
+        r.asked_texts.append(q["question_text"])
+        r.last_question_text = composed.question_only or composed.text
+        r.persist_progress_nowait("asking_question")
+        lead = prefix or refusals.MAIN_LEAD[self.language]
+        await self._say(Speech(f"{lead} {composed.text}".strip(), "NEXT_QUESTION", q["id"], q["question_text"]))
 
     # ---------------------------------------------------------------- answers
     async def _answer_turn(self, text: str, classification: Classification, generation: int) -> None:
@@ -588,7 +740,7 @@ class InterviewConductor:
         self._language_locked = True                 # an explicit choice is sticky: only another request changes it
         await self._apply_language(new_language, generation)
         confirmation = refusals.LANGUAGE_SWITCHED[self.language]
-        asking_now = not (q is None or not q.get("question_text") or r.small_talk_done < r.small_talk_rounds)
+        asking_now = not (q is None or not q.get("question_text") or r.in_preflight)
         # While the confirmation is spoken, translate ONLY the question about to be asked, so the candidate is not left
         # waiting on the whole remaining plan (a batch of every later question could take up to
         # LOCALIZE_BATCH_DEADLINE). The rest is translated in the background, ready before it is needed.
@@ -599,6 +751,9 @@ class InterviewConductor:
         finally:
             await translating
         await self._localize_upcoming(self.language, wait=False)       # the remaining questions, off the critical path
+        if r.in_preflight:
+            # Still in the opening: put the pending clarification / readiness / environment question back, in the new language.
+            return await self._say_preflight(self._stage_prompt(), "LANGUAGE_SWITCH")
         if not asking_now:
             return
         self._check(generation)
@@ -610,9 +765,9 @@ class InterviewConductor:
         await self._say(Speech(composed.text, "LANGUAGE_SWITCH", q["id"], q["question_text"]))
 
     # ---------------------------------------------------------------- moving on
-    async def _advance_and_ask(self, generation: int, mentioned: list[str], prefix: str = "") -> None:
+    async def _advance_and_ask(self, generation: int, mentioned: list[str], prefix: str = "", force: bool = False) -> None:
         r = self.runner
-        if self.turns.turn_number and self._advanced_turn == self.turns.turn_number:
+        if not force and self.turns.turn_number and self._advanced_turn == self.turns.turn_number:
             # One finalized turn advances the interview at most once, whatever else is racing.
             self._event("advance_ignored_duplicate")
             return
@@ -629,6 +784,12 @@ class InterviewConductor:
         self._event("question_transition", from_idx=from_idx, to_idx=r.idx, final=nq is None)
         if nq is None:
             return await self._finish()
+        # Leaving the resume-question block: the existing environment check comes next, before any main question.
+        if r.stage == flow.RESUME_QUESTIONS and not r.is_opening_index(r.idx) and r.env_resolved is None:
+            self._enter_stage(flow.ENVIRONMENT_CHECK)
+            return await self._say_preflight(f"{prefix} {refusals.ENV_ASK[self.language]}".strip(), "SMALL_TALK")
+        if r.stage == flow.RESUME_QUESTIONS and r.idx > (1 if r.questions and r.questions[0].get("type") == "introduction" else 0):
+            prefix = prefix or refusals.RESUME_NEXT[self.language]
         composed = await self._compose(ComposeRequest(
             action=Action.NEXT_QUESTION, question=previous or nq, next_question=nq, mentioned_concepts=mentioned,
             language=self.language, role=self.role, experience_level=self.experience_level,

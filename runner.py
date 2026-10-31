@@ -17,6 +17,7 @@ import time
 import httpx
 
 from config import AGENT_SERVICE_KEY, API_BASE_URL
+import interview_flow as flow
 from focus import followup_limit
 from policy import QuestionState
 
@@ -35,10 +36,16 @@ class InterviewRunner:
     def __init__(self, http: httpx.AsyncClient, interview_id: str, plan: dict, *, candidate_name: str = "",
                  coverage_threshold: float = 0.7, max_followups_per_question: int = 2,
                  depth_probe_enabled: bool = True, duration_minutes: int = 30, small_talk_rounds: int = 2,
-                 clock=time.time):
+                 candidate_facts: dict | None = None, clock=time.time):
         self.http = http
         self.interview_id = interview_id
-        self.questions = list(plan["questions"])
+        # Plan order for the structured opening (see interview_flow.py): intro, then 1-2 resume-grounded questions (or the
+        # single generic background question), then everything else. Deterministic, so a restarted worker rebuilds the
+        # same order from the same stored plan.
+        self.questions, self.opening_count = flow.arrange_questions(plan["questions"])
+        self.opening_ids = {q["id"] for q in self.questions[1:1 + self.opening_count]} if self.questions and \
+            self.questions[0].get("type") == "introduction" else {q["id"] for q in self.questions[:self.opening_count]}
+        self.candidate_facts = dict(candidate_facts or {})     # verified against the resume by the API; spoken in the intro
         self.candidate_name = candidate_name
         self.coverage_threshold = coverage_threshold
         self.max_followups_per_question = max_followups_per_question
@@ -49,6 +56,15 @@ class InterviewRunner:
         self.started_at = clock()
         self.idx = 0
         self.small_talk_done = 0
+        # Where the candidate is in the structured opening (interview_flow.STAGE_ORDER). Changed only by the conductor.
+        # small_talk_rounds=0 has always meant "no opening conversation": the interview starts at its first question.
+        self.stage = flow.INTRODUCTION if small_talk_rounds > 0 else flow.MAIN_INTERVIEW
+        self.readiness_confirmed = False
+        self.clarifications = 0           # doubts answered so far
+        self.unclear = 0                  # unclear replies in the current stage
+        self.env_retries = 0
+        self.env_resolved = None          # True / False once the environment check has been decided
+        self.preflight_nudged = 0         # silence prompts spoken in the current opening stage (at most one)
         self.resumed = False
         self.phase = "created"
         self.state = self._new_question_state(self.questions[0]) if self.questions else None
@@ -69,13 +85,33 @@ class InterviewRunner:
         self.on_progress = None
 
     # ------------------------------------------------------------------ state
+    @property
+    def in_preflight(self) -> bool:
+        """True while the interviewer is still introducing, clarifying, confirming readiness or checking the environment:
+        no question is on the table, so nothing the candidate says is an answer."""
+        return self.stage in flow.PREFLIGHT_STAGES
+
+    def is_opening_index(self, idx: int) -> bool:
+        first = 1 if self.questions and self.questions[0].get("type") == "introduction" else 0
+        return first <= idx < first + self.opening_count
+
+    def set_stage(self, stage: str) -> None:
+        self.stage = stage
+        self.unclear = 0
+        self.preflight_nudged = 0
+        if stage in (flow.RESUME_QUESTIONS, flow.MAIN_INTERVIEW):
+            self.small_talk_done = max(self.small_talk_done, self.small_talk_rounds)   # legacy progress readers
+
     def _new_question_state(self, question: dict) -> QuestionState:
         priority = question.get("focus_priority")
+        max_followups = followup_limit(self.max_followups_per_question, priority)
+        if question.get("id") in self.opening_ids:
+            max_followups = min(max_followups, 1)        # the opening stage stays short: at most one follow-up each
         return QuestionState(
             question_id=question["id"], topic=question_topic(question),
             focus=question.get("focus") or "", focus_priority=priority or "",
             coverage_threshold=self.coverage_threshold,
-            max_followups=followup_limit(self.max_followups_per_question, priority),
+            max_followups=max_followups,
             max_seconds=int(question.get("time_limit") or DEFAULT_QUESTION_SECONDS),
             depth_probe_enabled=self.depth_probe_enabled,
         )
@@ -102,20 +138,43 @@ class InterviewRunner:
 
     def progress_snapshot(self) -> dict:
         return {"question_index": self.idx, "followup_count": self.state.followup_count if self.state else 0,
-                "small_talk_done": self.small_talk_done, "phase": self.phase}
+                "small_talk_done": self.small_talk_done, "phase": self.phase, "stage": self.stage,
+                "readiness": int(self.readiness_confirmed)}
 
     def restore(self, progress: dict | None) -> bool:
-        """Resume from server-held progress. Returns True if this was a real resume (the candidate
-        had already got past the greeting) - a fresh or barely-started interview restarts cleanly."""
-        if not progress or int(progress.get("question_index", 0)) < 1:
+        """Resume from server-held progress. Returns True if this was a real resume (the candidate had already got past
+        the introduction) - a fresh or barely-started interview restarts cleanly.
+
+        A worker that restarts while the candidate is still in the opening (clarifying, confirming readiness, answering
+        a resume question, the environment check) continues at that stage; it never introduces itself again."""
+        if not progress:
             return False
-        self.idx = min(int(progress["question_index"]), len(self.questions))
-        self.small_talk_done = max(int(progress.get("small_talk_done", 0)), self.small_talk_rounds)
+        stage = progress.get("stage")
+        index = int(progress.get("question_index", 0))
+        if stage in flow.STAGE_ORDER and stage != flow.INTRODUCTION:
+            self.stage = stage
+            self.readiness_confirmed = bool(progress.get("readiness")) or flow.stage_rank(stage) > flow.stage_rank(flow.READINESS)
+            if index < 1 and stage in flow.PREFLIGHT_STAGES and stage != flow.ENVIRONMENT_CHECK:
+                self.idx = 0
+                self.state = self._new_question_state(self.questions[0]) if self.questions else None
+                self.resumed = True
+                self.phase = "resumed"
+                return True
+        elif index < 1:
+            return False
+        else:
+            # A stored interview from before the structured opening: it was already in its questions.
+            self.stage = flow.MAIN_INTERVIEW
+        self.idx = min(max(index, 0), len(self.questions))
+        self.small_talk_done = max(int(progress.get("small_talk_done", 0)), self.small_talk_rounds) \
+            if self.stage in (flow.RESUME_QUESTIONS, flow.MAIN_INTERVIEW) else int(progress.get("small_talk_done", 0))
         question = self.current_question
         if question is None:
             return False
         self.state = self._new_question_state(question)
         self.state.followup_count = min(int(progress.get("followup_count", 0)), self.state.max_followups)
+        if self.stage == flow.ENVIRONMENT_CHECK:
+            self.env_resolved = None
         self.resumed = True
         self.phase = "resumed"
         return True

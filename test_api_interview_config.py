@@ -199,7 +199,7 @@ def test_progress_only_moves_forward(client, role_and_candidate):
     ok = client.post(f"/v1/interviews/{iid}/progress", data={"question_index": 2, "followup_count": 1, "small_talk_done": 2, "phase": "follow_up"})
     assert ok.json()["accepted"] is True
     assert client.get(f"/v1/interviews/{iid}/agent-context").json()["progress"] == {
-        "question_index": 2, "followup_count": 1, "small_talk_done": 2, "phase": "follow_up"}
+        "question_index": 2, "followup_count": 1, "small_talk_done": 2, "phase": "follow_up", "stage": "", "readiness": 0}
     stale = client.post(f"/v1/interviews/{iid}/progress", data={"question_index": 1, "followup_count": 0, "small_talk_done": 2})
     assert stale.json()["accepted"] is False
     same_q_older = client.post(f"/v1/interviews/{iid}/progress", data={"question_index": 2, "followup_count": 0, "small_talk_done": 2})
