@@ -329,7 +329,8 @@ async def test_a_question_during_the_environment_check_is_answered_and_the_check
 async def test_ending_during_the_opening_is_an_early_end_and_is_not_a_normal_completion(harness_factory):
     h = opening_harness(harness_factory)
     await h.conductor.start()
-    out = await h.say("Actually I want to end the interview")
+    await h.say("Actually I want to end the interview")
+    out = await h.say("Yes please")
     assert out.action == "INTERVIEW_COMPLETE" and h.runner.terminal and h.judge_calls == []
 
 
