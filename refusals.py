@@ -217,6 +217,12 @@ LANGUAGE_SWITCHED = {
     "hi": "ज़रूर, अब हम हिंदी में बात करेंगे।",
     "hinglish": "Sure, अब हम Hinglish में बात करेंगे।",
 }
+# The candidate asked for the language the interview is already in ("can you speak English?"): say so, never just re-read the question.
+LANGUAGE_ALREADY = {
+    "en": "Yes, we're already speaking in English. If you'd like Hindi or Hinglish instead, just tell me and I'll switch.",
+    "hi": "जी, हम अभी हिंदी में ही बात कर रहे हैं। अगर आप अंग्रेज़ी या हिंग्लिश चाहें तो बता दीजिए, मैं बदल दूँगा।",
+    "hinglish": "जी, हम अभी Hinglish में ही बात कर रहे हैं। अगर आप English या Hindi चाहें तो बता दीजिए, मैं switch कर दूँगा।",
+}
 # Spoken when the candidate asks for, or is transcribed in, a language this interview does not support. Fixed text:
 # nothing the candidate said is echoed, and the interview stays in the language it was in.
 UNSUPPORTED_LANGUAGE = {
@@ -478,7 +484,7 @@ def fixed_phrases(language: str | None, *, essential_only: bool = False) -> list
         lines = [text for variants in refusals.values() for text in variants]
     lines += [MOVE_ON[lang], READY_TO_BEGIN[lang], CLOSING[lang], EARLY_END[lang],
               UNSUPPORTED_LANGUAGE[lang], DIDNT_CATCH_LANGUAGE[lang], IDLE_NUDGE[lang], AUDIO_TROUBLE[lang],
-              ACK_PRESENCE[lang], ACK_NEED_TIME[lang], PLEASE_CONTINUE[lang]]
+              ACK_PRESENCE[lang], ACK_NEED_TIME[lang], PLEASE_CONTINUE[lang], LANGUAGE_ALREADY[lang]]
     lines += [READINESS_ASK[lang], CLARIFY_MORE[lang], ENV_ASK[lang]]
     if not essential_only:
         lines += [SMALL_TALK_FOLLOWUP[lang], WELCOME_BACK[lang], CLARIFY_GO_AHEAD[lang], CLARIFY_RETRY[lang],

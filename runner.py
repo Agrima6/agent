@@ -242,7 +242,10 @@ class InterviewRunner:
         if self.on_progress is not None:
             question = self.current_question
             try:
-                self.on_progress({"question_id": question["id"] if question else None, "question_index": self.idx,
+                # During the opening (introduction, doubts, readiness, environment check) no question is on the table, so the
+                # candidate's screen must not show one.
+                shown = None if self.in_preflight else question
+                self.on_progress({"question_id": shown["id"] if shown else None, "question_index": self.idx,
                                   "total": len(self.questions), "followup_count": snap["followup_count"], "phase": phase})
             except Exception:  # noqa: BLE001 - a UI hook must never affect the interview
                 pass
