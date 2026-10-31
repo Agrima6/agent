@@ -230,7 +230,8 @@ _UNRELATED = _p(
 
 _REPEAT = _p(
     # A request ("repeat that", "please rephrase the question"), not the verb inside an answer ("we repeat the call").
-    r"^\W*(?:please\s+|can\s+you\s+|could\s+you\s+)?(?:repeat|rephrase|reword)\b(?!.{0,20}\b(?:previous|last|earlier|first|second|third)\b)",
+    r"^\W*(?:(?:sorry|pardon|excuse\s+me|sir|ma'?am|madam|ji)[\s,.!]+)*(?:please\s+|can\s+you\s+|could\s+you\s+)?(?:repeat|rephrase|reword)\b(?!.{0,20}\b(?:previous|last|earlier|first|second|third)\b)",
+    r"^\W*(?:(?:sorry|pardon|excuse\s+me|sir|ma'?am|madam|ji)[\s,.!]+)*(?:can|could|would|will)\s+you\s+(?:please\s+)?(?:repeat|rephrase|reword|say)\b(?!.{0,20}\b(?:previous|last|earlier|first|second|third)\b)",
     r"\b(?:repeat|rephrase|reword)\s+(?:that|it|this|the\s+question|your\s+question|please|again)\b(?!.{0,20}\b(?:previous|last|earlier|first|second|third)\b)",
     # "once more" inside an answer ("retry the failed ones once more") is not a request: only as one, or as the closer.
     r"\bsay\s+(?:that|it)\s+again\b|\bcome\s+again\b"
@@ -239,7 +240,7 @@ _REPEAT = _p(
     r"^(?:pardon|sorry|what|huh|excuse\s+me)\s*[?.!]*$",
     r"\bi\s+(?:didn't|did\s+not|couldn't|could\s+not|missed|lost)\s+(?:catch|hear|get|understand|follow)\b",
     r"\b(?:didn't|did\s+not)\s+(?:catch|hear|get|understand)\s+(?:that|the\s+question|you|it)\b",
-    r"\bwhat\s+(?:was|is)\s+the\s+question\b|\bwhat\s+did\s+you\s+(?:say|ask)\b",
+    r"\bwhat(?:'s|\s+is|\s+was|s)\s+the\s+question\b|\bwhat\s+did\s+you\s+(?:say|ask)\b|\bwhich\s+question\b|\bwhat\s+(?:were|are)\s+you\s+(?:saying|asking)\b",
     r"\bi\s+(?:don'?t|do\s+not)\s+(?:understand|get)\s+(?:the|this|that|your|what\s+you)\b|\bdon'?t\s+know\s+what\s+you\s+mean\b",
     r"\b(?:can|could)\s+you\s+(?:please\s+)?(?:ask|say)\s+(?:that|it|the\s+question)\s+(?:again|differently|another\s+way)\b",
     r"\bask\s+(?:it|that|the\s+question)\s+(?:again|differently)\b",

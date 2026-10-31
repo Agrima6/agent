@@ -206,6 +206,7 @@ async def test_a_genuine_change_of_subject_is_redirected_politely(harness_factor
 
 async def test_silence_or_noise_is_handled_without_advancing(harness_factory):
     h = harness_factory(evaluations=[], composer_responses=[])
+    await h.conductor.handle_candidate_turn("um")
     out = await h.say("um")
     assert out.action == "REDIRECT" and h.runner.idx == 0 and h.judge_calls == []
 

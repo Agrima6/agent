@@ -116,6 +116,10 @@ class InterviewConductor:
         self._localized: dict[tuple[str, str], str] = {}     # (question id, language) -> the question already rendered in that language
         self._localizing: set[asyncio.Task] = set()
         self._last_spoken = ""
+        # The last thing the interviewer actually ASKED (a question or the pending opening prompt) - not an apology or an
+        # acknowledgement. "Can you repeat that?" repeats this, never "Sorry, I didn't catch that".
+        self._last_prompt = ""
+        self._filler_streak = 0                   # consecutive recogniser hallucinations ("Thank you.") heard from silence
         # Normalised texts of turns queued or being handled right now: a second end-of-turn carrying the same words
         # while the first is still in flight is one answer reported twice (a duplicated end-of-turn event, or a
         # "done speaking" press racing the detector) - it must not be answered twice or advance twice.
@@ -298,6 +302,8 @@ class InterviewConductor:
         if r.terminal and speech.action != "INTERVIEW_COMPLETE":
             return
         self._last_spoken = speech.text
+        if speech.action in ("GREETING", "NEXT_QUESTION", "FOLLOW_UP", "CLARIFICATION", "SMALL_TALK", "LANGUAGE_SWITCH", "REPEAT"):
+            self._last_prompt = speech.text
         self.turns.go(TurnPhase.COMPLETED if speech.action == "INTERVIEW_COMPLETE" else TurnPhase.QUESTION_DELIVERED)
         r.record_turn_nowait(speech.question_id or (r.state.question_id if r.state else ""), "agent", speech.text,
                              is_followup=speech.is_followup, action=speech.action,
@@ -369,6 +375,19 @@ class InterviewConductor:
                     suspicious=classification.suspicious)
         if q is None:
             return
+
+        # A lone "Thank you." / "you" / "bye" heard from silence is the recogniser making words up, not the candidate
+        # speaking. Answering "I didn't catch that" to it interrupts a candidate who said nothing - so the first one is
+        # only noted; a second in a row is treated as the audio trouble it probably is.
+        if intent == Intent.EMPTY and classification.rule == "filler":
+            self._filler_streak += 1
+            if self._filler_streak < 2:
+                self._record_preflight(text, "noise") if r.in_preflight else self._record_candidate(text, Intent.EMPTY)
+                self._event("filler_ignored", streak=self._filler_streak)
+                self.turns.phase = TurnPhase.QUESTION_DELIVERED       # nothing was said back: the turn is simply still open
+                return
+        else:
+            self._filler_streak = 0
 
         if intent == Intent.END_INTERVIEW:
             return await self._end_early(text)
@@ -474,11 +493,20 @@ class InterviewConductor:
         q = r.current_question
         self._record_candidate(text, intent)
         if r.in_preflight:
-            spoken = self._last_spoken or refusals.introduction(self.language, r.candidate_name, self.role, self.interviewer_name,
-                                                                 r.candidate_facts)
+            # In the opening there is no question yet: repeat what is being waited on (the introduction if nothing was
+            # answered yet, otherwise the pending doubt / readiness / environment prompt).
+            if r.stage in (flow.INTRODUCTION, flow.CLARIFICATION) and r.clarifications == 0:
+                spoken = refusals.introduction(self.language, r.candidate_name, self.role, self.interviewer_name, r.candidate_facts)
+            else:
+                spoken = self._stage_prompt()
+            if intent == Intent.LANGUAGE_REQUEST:
+                spoken = f"{refusals.LANGUAGE_ALREADY[self.language]} {spoken}"
         else:
             spoken = r.last_question_text or (q or {}).get("question_text", "")
-        await self._say(Speech(spoken, "REPEAT", (q or {}).get("id", ""), (q or {}).get("question_text", "")))
+            if intent == Intent.LANGUAGE_REQUEST:
+                spoken = f"{refusals.LANGUAGE_ALREADY[self.language]} {spoken}".strip()
+        await self._say(Speech(spoken, "REPEAT", PREFLIGHT_QUESTION_ID if r.in_preflight else (q or {}).get("id", ""),
+                               (q or {}).get("question_text", "") if not r.in_preflight else ""))
 
     async def _refuse(self, intent: Intent, text: str, generation: int) -> None:
         """Fixed, pre-approved response. Never argued with, never generated, never injectable."""
@@ -546,9 +574,16 @@ class InterviewConductor:
         intent = classification.intent
         if intent == Intent.REPEAT:
             return await self._repeat(text)
-        if intent in (Intent.PROMPT_INJECTION, Intent.EMPTY, Intent.REQUEST_ANSWER, Intent.REQUEST_HINT):
-            # Instructions aimed at the interviewer and noise are refused/ignored exactly as before; a doubt about how the
-            # interview works is not one of these.
+        if intent == Intent.EMPTY:
+            # Noise or an unintelligible reply during the opening: there is no "answer" to go ahead with, so ask for the
+            # thing actually pending (a doubt, readiness, the environment check).
+            self._record_preflight(text, intent.value)
+            retry = {flow.READINESS: refusals.READINESS_RETRY, flow.ENVIRONMENT_CHECK: refusals.ENV_RETRY_ASK}.get(
+                r.stage, refusals.CLARIFY_RETRY)
+            return await self._say_preflight(retry[L], "REDIRECT")
+        if intent in (Intent.PROMPT_INJECTION, Intent.REQUEST_ANSWER, Intent.REQUEST_HINT):
+            # Instructions aimed at the interviewer are refused exactly as before; a doubt about how the interview works
+            # is not one of these.
             self._record_preflight(text, intent.value)
             return await self._say_preflight(self.picker.pick(intent, L), "REDIRECT")
 
@@ -702,6 +737,7 @@ class InterviewConductor:
             self._check(generation)
             state.asked_followups.append(composed.text)
             r.asked_texts.append(composed.text)
+            r.last_question_text = composed.text          # "repeat that" after a follow-up repeats the follow-up
             r.persist_progress_nowait("follow_up")
             await self._say(Speech(composed.text, decision.action.value, q["id"], q["question_text"], is_followup=True))
             return

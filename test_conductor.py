@@ -313,8 +313,10 @@ async def test_a_long_answer_mentioning_skip_list_is_an_answer_not_a_skip(harnes
 
 async def test_empty_or_noise_turns_get_a_gentle_prompt_not_a_followup(harness_factory):
     h = harness_factory()
-    out = await h.say("um")
-    assert out.action == "REDIRECT" and "catch" in out.text.lower() or "hear" in out.text.lower()
+    await h.conductor.handle_candidate_turn("um")                       # the first lone filler is only noted, never answered
+    assert h.spoken == []
+    out = await h.say("um")                                              # a second in a row is probably the microphone
+    assert out.action == "REDIRECT" and ("catch" in out.text.lower() or "hear" in out.text.lower())
     assert h.judge_calls == [] and h.runner.idx == 0
 
 

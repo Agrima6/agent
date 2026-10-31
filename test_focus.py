@@ -109,7 +109,7 @@ def test_high_priority_questions_get_extra_followups_low_ones_fewer():
 def test_progress_hook_reports_question_and_never_breaks_the_interview():
     from runner import InterviewRunner
     plan = {"questions": [{"id": "a", "question_text": "q1"}, {"id": "b", "question_text": "q2"}]}
-    r = InterviewRunner(None, "i", plan)
+    r = InterviewRunner(None, "i", plan, small_talk_rounds=0)       # no opening: the first question is on screen
     seen = []
     r.on_progress = seen.append
     r._spawn = lambda coro: coro.close()            # no event loop / network in a unit test
