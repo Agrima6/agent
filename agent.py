@@ -35,7 +35,8 @@ from config import (AGENT_NAME, AGENT_SERVICE_KEY, API_BASE_URL, ELEVENLABS_API_
                     OPENAI_API_KEY, SARVAM_API_KEY, TTS_PROVIDER, TTS_VOICE, VOICE_PROVIDER_FALLBACK)
 from edge_tts_plugin import EdgeTTS
 from language_policy import STT_VOCABULARY_HINT, clean_transcript, noise_reason
-from languages import LANGUAGE_CONFIGS, normalize_language
+from languages import (ELEVENLABS_ENGLISH_ONLY_MODELS, ELEVENLABS_V25_LANGUAGES, LANGUAGE_CONFIGS, fallback_language,
+                       languages_for_provider, normalize_language)
 import refusals
 import turn_trace
 from observability import attach_metrics_logging
@@ -202,14 +203,10 @@ class VoiceProviderError(RuntimeError):
 
 
 # ElevenLabs models that only speak English: using one for a Hindi/Hinglish interview produces English-accented noise.
-ELEVENLABS_ENGLISH_ONLY_MODELS = frozenset({"eleven_monolingual_v1", "eleven_turbo_v2", "eleven_flash_v2"})
 # Models that accept an explicit language code. For these the language is PINNED, so the engine does not guess it from
 # the text of each sentence (the cause of an English sentence being read with Urdu-style pronunciation, and of
 # romanised Hindi being read as English).
 ELEVENLABS_LANGUAGE_CODE_MODELS = frozenset({"eleven_flash_v2_5", "eleven_turbo_v2_5", "eleven_v3"})
-# Of our interview languages, the ones each ElevenLabs model can speak: v3 covers all of them, the v2.5 models only Tamil
-# beyond English and Hindi. (Sarvam covers every language.)
-ELEVENLABS_V25_LANGUAGES = frozenset({"en", "hi", "hinglish", "ta"})
 
 
 def stt_options_for(language: str, auto_language: bool) -> dict:
@@ -244,11 +241,7 @@ def elevenlabs_language(language: str) -> str:
 def supported_languages_for(provider: str, model: str = "") -> frozenset[str]:
     """The interview languages this provider/model can actually SPEAK. A switch to anything else is refused with a
     clear message instead of being attempted with a voice that cannot pronounce it."""
-    if provider == "elevenlabs" and (model or "") in ELEVENLABS_ENGLISH_ONLY_MODELS:
-        return frozenset({"en"})
-    if provider == "elevenlabs":
-        return frozenset(LANGUAGE_CONFIGS) if (model or "") == "eleven_v3" else ELEVENLABS_V25_LANGUAGES
-    return frozenset(LANGUAGE_CONFIGS)
+    return languages_for_provider(provider, model)
 
 
 def build_tts(voice: VoiceConfig) -> tuple[tts.TTS, SarvamTTS | None]:
@@ -320,6 +313,14 @@ async def entrypoint(ctx: JobContext):
         # The provider recorded when this interview was created (an admin changing the setting mid-interview does not
         # affect it); older interviews without one use the environment default.
         voice_provider = (data.get("voice_provider") or TTS_PROVIDER).lower()
+        # A language this voice cannot speak must not crash the interview (the candidate would face an interviewer who never
+        # joins): start in the closest language it can speak instead. The candidate can still ask for another by voice.
+        spoken_by_voice = supported_languages_for(voice_provider, ELEVENLABS_MODEL)
+        if language not in spoken_by_voice:
+            usable = fallback_language(language, spoken_by_voice)
+            logger.warning("interview %s asked for %s but the %s voice cannot speak it; starting in %s",
+                           interview_id, language, voice_provider, usable)
+            language = usable
         logger.info("interview %s uses voice provider %s", interview_id, voice_provider)
         voice = resolve_voice(language, voice_prefs.get("gender"), voice_prefs.get("speaker"),
                               voice_prefs.get("pace"), provider=voice_provider)

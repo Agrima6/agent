@@ -297,3 +297,12 @@ def test_the_refusal_names_only_the_languages_the_voice_can_speak():
     text = refusals.unsupported_language("en", frozenset({"en", "hi", "hinglish", "ta"}))
     assert "Tamil" in text and "Punjabi" not in text and "{" not in text
     assert "Punjabi" in refusals.unsupported_language("en")
+
+
+def test_a_language_the_voice_cannot_speak_falls_back_to_the_closest_one_that_can():
+    from languages import fallback_language, languages_for_provider
+    flash = languages_for_provider("elevenlabs", "eleven_flash_v2_5")
+    assert fallback_language("pa", flash) == "hinglish" and fallback_language("ta", flash) == "ta"
+    assert fallback_language("pa", frozenset({"en"})) == "en"
+    assert fallback_language("pa", languages_for_provider("sarvam")) == "pa"
+

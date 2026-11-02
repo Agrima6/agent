@@ -114,3 +114,10 @@ def test_without_any_saved_choice_a_missing_key_does_not_block_local_development
     role_id, cand_id = role_and_candidate
     monkeypatch.setattr(config, "SARVAM_API_KEY", "")
     assert create(client, role_id, cand_id).status_code == 200
+
+
+def test_settings_publish_the_languages_the_active_voice_can_speak(client, monkeypatch):
+    monkeypatch.setattr(config, "ELEVENLABS_MODEL", "eleven_flash_v2_5")
+    assert "pa" in client.get(URL).json()["supportedLanguages"]                       # Sarvam speaks everything
+    put(client, "elevenlabs")
+    assert client.get(URL).json()["supportedLanguages"] == ["en", "hi", "hinglish", "ta"]

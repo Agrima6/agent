@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 import config
 from db import AppSetting, Interview, SettingAudit
 import states
+from languages import languages_for_provider
 
 PROVIDERS = ("sarvam", "elevenlabs")
 SETTING_KEY = "voice_ai_provider"
@@ -79,6 +80,8 @@ def describe(db: Session) -> dict:
         "updatedAt": row.updated_at.isoformat() + "Z" if row and row.updated_at else None,
         "updatedBy": row.updated_by if row else None,
         "activeSessions": active_sessions,
+        # The interview languages the ACTIVE provider's voice can speak (candidates are only offered these).
+        "supportedLanguages": sorted(languages_for_provider(row.value if row else default_provider(), config.ELEVENLABS_MODEL)),
     }
 
 
