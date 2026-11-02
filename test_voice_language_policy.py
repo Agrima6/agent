@@ -60,14 +60,14 @@ def test_script_profile_counts_letters_per_script():
 
 
 @pytest.mark.parametrize("text,label", [
-    ("Can I speak in Urdu?", "Urdu"), ("Please speak in Tamil", "Tamil"), ("Could we continue in Punjabi", "Punjabi"),
+    ("Can I speak in Urdu?", "Urdu"), ("Please speak in Odia", "Odia"), ("Could we continue in Nepali", "Nepali"),
 ])
 def test_requests_for_unsupported_languages_are_recognised(text, label):
     assert unsupported_request(text) == label
 
 
 @pytest.mark.parametrize("text", [
-    "I know Tamil and built a Tamil chatbot for a bank's customer support team last year",
+    "I know Odia and built an Odia chatbot for a bank's customer support team last year",
     "Can I speak in Hindi?", "Hindi or English, whichever you prefer", "The answer is a hash map", "",
 ])
 def test_statements_and_supported_languages_are_not_unsupported_requests(text):
@@ -158,7 +158,7 @@ def test_an_english_only_model_fails_clearly_for_a_hindi_interview(monkeypatch, 
 def test_supported_languages_follow_the_provider_and_model():
     assert supported_languages_for("elevenlabs", "eleven_flash_v2") == frozenset({"en"})
     assert supported_languages_for("elevenlabs", "eleven_flash_v2_5") == frozenset({"en", "hi", "hinglish"})
-    assert supported_languages_for("sarvam", "") == frozenset({"en", "hi", "hinglish"})
+    assert supported_languages_for("sarvam", "") == frozenset({"en", "hi", "hinglish", "pa", "ta", "te", "bn", "mr", "gu", "kn", "ml"})
 
 
 def test_only_the_candidate_identity_may_end_a_turn():

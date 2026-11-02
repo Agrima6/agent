@@ -2,6 +2,8 @@
 competency weights and which question-bank questions are eligible — so "Frontend Developer"
 and "Product Manager" actually get different interviews, not the same generic bank."""
 
+from blue_collar import ALL_KEYWORDS as _BLUE_COLLAR_KEYWORDS
+
 ROLE_TYPE_KEYWORDS = {
     "product_manager": ["product manager", "product owner", " pm ", "^pm$", "product lead"],
     "frontend": ["frontend", "front-end", "front end", "ui engineer", "ux engineer", "react ",
@@ -14,13 +16,7 @@ ROLE_TYPE_KEYWORDS = {
     "devops": ["devops", "sre", "site reliability", "platform engineer", "infrastructure engineer",
                "cloud engineer"],
     "support": ["support", "customer success", "customer service"],
-    "blue_collar": [
-        "factory worker", "machine operator", "assembly line", "warehouse", "labourer", "laborer",
-        "driver", "delivery boy", "delivery partner", "electrician", "plumber", "welder",
-        "technician", "mechanic", "fitter", "helper", "loader", "packer", "housekeeping",
-        "security guard", "watchman", "carpenter", "mason", "field worker", "site worker",
-        "construction worker", "forklift operator", "tailor", "cook", "kitchen staff",
-    ],
+    "blue_collar": list(_BLUE_COLLAR_KEYWORDS),
 }
 
 # Role types where the candidate is more likely to be more comfortable with simple, spoken,

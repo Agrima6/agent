@@ -35,6 +35,46 @@ LANGUAGE_CONFIGS = {
         ),
     },
 }
+
+# Other Indian languages. Each is both LISTENABLE (Whisper has the language) and SPEAKABLE (Sarvam bulbul:v3 has the
+# language code); Odia is left out because Whisper cannot transcribe it. Fixed interviewer lines for each live in
+# i18n/<code>.py. Speaking uses the same Sarvam voices as Hindi: the voice is multilingual, the language code selects.
+_INDIC = {
+    # code: (English name, native name, script, writing note)
+    "pa": ("Punjabi", "ਪੰਜਾਬੀ", "Gurmukhi (ਗੁਰਮੁਖੀ)", "Plain, everyday spoken Punjabi."),
+    "ta": ("Tamil", "தமிழ்", "Tamil script (தமிழ்)", "Plain, everyday spoken Tamil, not literary Tamil."),
+    "te": ("Telugu", "తెలుగు", "Telugu script (తెలుగు)", "Plain, everyday spoken Telugu."),
+    "bn": ("Bengali", "বাংলা", "Bengali script (বাংলা)", "Plain, everyday spoken Bengali (cholito bhasha)."),
+    "mr": ("Marathi", "मराठी", "Devanagari (देवनागरी)", "Plain, everyday spoken Marathi."),
+    "gu": ("Gujarati", "ગુજરાતી", "Gujarati script (ગુજરાતી)", "Plain, everyday spoken Gujarati."),
+    "kn": ("Kannada", "ಕನ್ನಡ", "Kannada script (ಕನ್ನಡ)", "Plain, everyday spoken Kannada."),
+    "ml": ("Malayalam", "മലയാളം", "Malayalam script (മലയാളം)", "Plain, everyday spoken Malayalam."),
+}
+for _code, (_name, _native, _script, _note) in _INDIC.items():
+    LANGUAGE_CONFIGS[_code] = {
+        "label": _name,
+        "native_label": _native,
+        "stt_language": _code,
+        "sarvam_language_code": f"{_code}-IN",
+        "instruction": (
+            f"Write in {_name}, in {_script} - never in Roman/Latin letters - because the text-to-speech engine "
+            f"mispronounces romanized text. {_note} Common English words may stay in Latin script where that is how "
+            "people actually say them (project, team, manager, time). Avoid gendered first-person verb forms where the "
+            "language allows, so the sentence works for either a male or a female voice."
+        ),
+    }
+for _code, _cfg in LANGUAGE_CONFIGS.items():
+    _cfg.setdefault("native_label", _cfg["label"])
+
+# Regional varieties people ask for by name. None has its own speech engine, so the interview is conducted in the
+# standard language they are closest to (understood by the same recogniser, answered in that language).
+DIALECT_ALIASES = {
+    "haryanvi": "hi", "bhojpuri": "hi", "rajasthani": "hi", "marwari": "hi", "maithili": "hi", "awadhi": "hi",
+    "chhattisgarhi": "hi", "magahi": "hi", "bundeli": "hi", "pahari": "hi", "garhwali": "hi", "kumaoni": "hi",
+    "braj": "hi", "dogri": "hi", "malvi": "hi", "nimadi": "hi", "tulu": "kn", "konkani": "mr", "kodava": "kn",
+    "sylheti": "bn",
+}
+
 DEFAULT_LANGUAGE = "en"
 
 PLAIN_LANGUAGE_INSTRUCTIONS = (

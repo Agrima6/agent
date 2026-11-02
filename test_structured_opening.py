@@ -404,5 +404,5 @@ def test_every_fixed_opening_line_exists_in_every_language_and_without_placehold
                  "CLARIFY_LIMIT", "READINESS_ASK", "READINESS_NOT_READY", "READINESS_RETRY", "READINESS_WAIT", "RESUME_LEAD",
                  "RESUME_NEXT", "ENV_ASK", "ENV_RETRY", "ENV_CONTINUE", "ENV_RETRY_ASK", "MAIN_LEAD"):
         table = getattr(refusals, name)
-        assert set(table) == {"en", "hi", "hinglish"}, name
+        assert {"en", "hi", "hinglish"} <= set(table), name
         assert all(text.strip() and "{" not in text for text in table.values()), name

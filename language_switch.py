@@ -8,6 +8,8 @@ mention a language, so it needs a clear request cue and a short utterance.
 """
 import re_dev as re
 
+from languages import DIALECT_ALIASES
+
 MAX_WORDS = 14                      # a request is short; a paragraph that mentions Hindi is an answer
 MAX_WORDS_EXPLICIT = 40             # ...unless it is an unmistakable instruction ("I am asking you to speak in ...")
 
@@ -15,8 +17,33 @@ _LANGS = {
     "hinglish": r"hinglish|hindlish|हिंग्लिश|हिंगलिश|हिन्ग्लिश|हिंग्लीश|हिंगलीश",
     "hi": r"hindi|hindee|हिंदी|हिन्दी|हिंदि",
     "en": r"english|angrezi|angrejhi|अंग्रेज़ी|अंग्रेजी|अंग्रेज़ी|इंग्लिश|इंगलिश|इंग्लीश|इंगरिश|इंग्रेजी",
+    "pa": r"punjabi|panjabi|ਪੰਜਾਬੀ|पंजाबी",
+    "ta": r"tamil|tamizh|தமிழ|तमिल",
+    "te": r"telugu|తెలుగు|तेलुगु|तेलगु",
+    "bn": r"bengali|bangla|বাংলা|बंगाली|बांग्ला",
+    "mr": r"marathi|मराठी",
+    "gu": r"gujarati|ગુજરાતી|गुजराती",
+    "kn": r"kannada|ಕನ್ನಡ|कन्नड़|कन्नड",
+    "ml": r"malayalam|മലയാള|मलयालम",
 }
+# Regional varieties people ask for by name. No speech engine has them, so each maps to the standard language it is
+# closest to (see languages.DIALECT_ALIASES); the interview is then conducted in that language.
+_DIALECT_PATTERNS = {
+    "haryanvi": r"haryanvi|hariyanvi|haryanavi|हरियाणवी|हरयाणवी", "bhojpuri": r"bhojpuri|भोजपुरी",
+    "rajasthani": r"rajasthani|राजस्थानी", "marwari": r"marwari|मारवाड़ी|मारवाडी", "maithili": r"maithili|मैथिली",
+    "awadhi": r"awadhi|अवधी", "chhattisgarhi": r"chhattisgarhi|छत्तीसगढ़ी", "magahi": r"magahi|मगही",
+    "bundeli": r"bundeli|बुंदेली", "pahari": r"pahari|पहाड़ी", "garhwali": r"garhwali|गढ़वाली", "kumaoni": r"kumaoni|कुमाऊँनी",
+    "dogri": r"dogri|डोगरी", "malvi": r"malvi|मालवी", "tulu": r"tulu|ತುಳು", "konkani": r"konkani|कोंकणी",
+}
+_LANGS_BASE = dict(_LANGS)
+for _name, _pattern in _DIALECT_PATTERNS.items():
+    _LANGS[DIALECT_ALIASES[_name]] = _LANGS[DIALECT_ALIASES[_name]] + "|" + _pattern
 _ANY_LANG = "|".join(f"(?:{p})" for p in _LANGS.values())
+# The language's own written name ("தமிழ்", "తెలుగు", "ਪੰਜਾਬੀ"): someone who writes it is asking in that language, where the
+# request words differ and the name is inflected ("தமிழில்"), so a short utterance naming it is treated as a request.
+_NATIVE_NAME = {code: re.compile("|".join(a for a in pattern.split("|") if any(ord(ch) > 127 for ch in a)), re.IGNORECASE)
+                for code, pattern in _LANGS.items() if any(ord(ch) > 127 for ch in pattern)}
+MAX_WORDS_NATIVE = 8
 
 # Phrases that make the language mention a REQUEST. Roman and Devanagari spellings of the common ways to ask.
 _REQUEST = re.compile(
@@ -46,14 +73,9 @@ _WORD = re.compile(r"[\wऀ-ॿ']+")
 # Languages people may ask for that this interview cannot conduct. Only a fixed label is ever returned.
 _UNSUPPORTED = {
     "Urdu": r"urdu|اردو",
-    "Punjabi": r"punjabi|panjabi|ਪੰਜਾਬੀ|पंजाबी",
-    "Tamil": r"tamil|தமிழ்|तमिल",
-    "Telugu": r"telugu|తెలుగు|तेलुगु",
-    "Bengali": r"bengali|bangla|বাংলা|बंगाली",
-    "Marathi": r"marathi|मराठी",
-    "Gujarati": r"gujarati|ગુજરાતી|गुजराती",
-    "Kannada": r"kannada|ಕನ್ನಡ|कन्नड़",
-    "Malayalam": r"malayalam|മലയാളം|मलयालम",
+    "Odia": r"odia|oriya|ଓଡ଼ିଆ|उड़िया",
+    "Assamese": r"assamese|অসমীয়া|असमिया",
+    "Nepali": r"nepali|नेपाली",
     "Arabic": r"arabic|العربية",
     "French": r"french|français",
     "Spanish": r"spanish|español",
@@ -137,7 +159,9 @@ def detect_language_request(text: str, current: str | None = None) -> str | None
     if len(asked) != 1:
         return None
     if not _REQUEST.search(positive) and not _EXPLICIT.search(positive):
-        return None
+        native = _NATIVE_NAME.get(asked[0])
+        if not (native and n_words <= MAX_WORDS_NATIVE and native.search(positive) and not _STATEMENT.search(positive)):
+            return None
     if _STATEMENT.search(positive) and not re.search(
             r"(?:can|could|would|will|may)\s+(?:you|we)|please|pls|plz|chahiye|want|prefer|asking", positive, re.IGNORECASE):
         return None
