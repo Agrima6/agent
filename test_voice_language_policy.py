@@ -158,7 +158,7 @@ def test_an_english_only_model_fails_clearly_for_a_hindi_interview(monkeypatch, 
 def test_supported_languages_follow_the_provider_and_model():
     assert supported_languages_for("elevenlabs", "eleven_flash_v2") == frozenset({"en"})
     assert supported_languages_for("elevenlabs", "eleven_flash_v2_5") == frozenset({"en", "hi", "hinglish", "ta"})
-    assert "pa" in supported_languages_for("elevenlabs", "eleven_v3") and "pa" not in supported_languages_for("elevenlabs", "eleven_flash_v2_5")
+    assert "pa" not in supported_languages_for("elevenlabs", "eleven_v3")        # v3 rejects the streaming connection
     assert supported_languages_for("sarvam", "") == frozenset({"en", "hi", "hinglish", "pa", "ta", "te", "bn", "mr", "gu", "kn", "ml"})
 
 
@@ -306,3 +306,18 @@ def test_a_language_the_voice_cannot_speak_falls_back_to_the_closest_one_that_ca
     assert fallback_language("pa", frozenset({"en"})) == "en"
     assert fallback_language("pa", languages_for_provider("sarvam")) == "pa"
 
+
+
+def test_an_interview_in_a_language_the_preferred_voice_cannot_speak_uses_sarvam_when_available():
+    from languages import offered_languages, provider_for_language
+    assert provider_for_language("elevenlabs", "ta", "eleven_flash_v2_5", sarvam_available=True) == "elevenlabs"
+    assert provider_for_language("elevenlabs", "pa", "eleven_flash_v2_5", sarvam_available=True) == "sarvam"
+    assert provider_for_language("elevenlabs", "pa", "eleven_flash_v2_5", sarvam_available=False) is None
+    assert provider_for_language("sarvam", "pa") == "sarvam"
+    assert "pa" in offered_languages("elevenlabs", "eleven_flash_v2_5", sarvam_available=True)
+    assert "pa" not in offered_languages("elevenlabs", "eleven_flash_v2_5", sarvam_available=False)
+
+
+def test_the_silence_nudge_handler_exists_on_the_interviewer():
+    import agent
+    assert hasattr(agent.InterviewerAgent, "idle_nudge")

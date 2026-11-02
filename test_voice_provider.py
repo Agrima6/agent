@@ -120,4 +120,6 @@ def test_settings_publish_the_languages_the_active_voice_can_speak(client, monke
     monkeypatch.setattr(config, "ELEVENLABS_MODEL", "eleven_flash_v2_5")
     assert "pa" in client.get(URL).json()["supportedLanguages"]                       # Sarvam speaks everything
     put(client, "elevenlabs")
+    assert "pa" in client.get(URL).json()["supportedLanguages"]                       # ...and covers what ElevenLabs cannot
+    monkeypatch.setattr(config, "SARVAM_API_KEY", "")
     assert client.get(URL).json()["supportedLanguages"] == ["en", "hi", "hinglish", "ta"]

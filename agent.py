@@ -36,7 +36,7 @@ from config import (AGENT_NAME, AGENT_SERVICE_KEY, API_BASE_URL, ELEVENLABS_API_
 from edge_tts_plugin import EdgeTTS
 from language_policy import STT_VOCABULARY_HINT, clean_transcript, noise_reason
 from languages import (ELEVENLABS_ENGLISH_ONLY_MODELS, ELEVENLABS_V25_LANGUAGES, LANGUAGE_CONFIGS, fallback_language,
-                       languages_for_provider, normalize_language)
+                       languages_for_provider, normalize_language, provider_for_language)
 import refusals
 import turn_trace
 from observability import attach_metrics_logging
@@ -154,6 +154,9 @@ class InterviewerAgent(Agent):
         task = asyncio.get_running_loop().create_task(_send())
         self._caption_tasks.add(task)
         task.add_done_callback(self._caption_tasks.discard)
+
+    async def idle_nudge(self) -> None:
+        await self.conductor.idle_nudge()
 
     async def replay_captions(self) -> int:
         """Re-send the caption history, in order, to a candidate who just connected. Returns the count."""
@@ -313,14 +316,19 @@ async def entrypoint(ctx: JobContext):
         # The provider recorded when this interview was created (an admin changing the setting mid-interview does not
         # affect it); older interviews without one use the environment default.
         voice_provider = (data.get("voice_provider") or TTS_PROVIDER).lower()
-        # A language this voice cannot speak must not crash the interview (the candidate would face an interviewer who never
-        # joins): start in the closest language it can speak instead. The candidate can still ask for another by voice.
-        spoken_by_voice = supported_languages_for(voice_provider, ELEVENLABS_MODEL)
-        if language not in spoken_by_voice:
-            usable = fallback_language(language, spoken_by_voice)
+        # A language the chosen voice cannot speak must not crash the interview (the candidate would face an interviewer who never
+        # joins). If Sarvam is configured it speaks every language, so THIS interview uses it; otherwise the interview starts in
+        # the closest language the chosen voice can speak. The candidate can still ask for another by voice.
+        routed = provider_for_language(voice_provider, language, ELEVENLABS_MODEL, sarvam_available=bool(SARVAM_API_KEY))
+        if routed is None:
+            usable = fallback_language(language, supported_languages_for(voice_provider, ELEVENLABS_MODEL))
             logger.warning("interview %s asked for %s but the %s voice cannot speak it; starting in %s",
                            interview_id, language, voice_provider, usable)
             language = usable
+        elif routed != voice_provider:
+            logger.info("interview %s is in %s: using the %s voice instead of %s for this interview",
+                        interview_id, language, routed, voice_provider)
+            voice_provider = routed
         logger.info("interview %s uses voice provider %s", interview_id, voice_provider)
         voice = resolve_voice(language, voice_prefs.get("gender"), voice_prefs.get("speaker"),
                               voice_prefs.get("pace"), provider=voice_provider)
