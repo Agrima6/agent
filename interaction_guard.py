@@ -14,7 +14,7 @@ Design rules that keep this from misfiring on genuine answers:
   * Prompt-injection phrases fire at any length, but on a long utterance they only flag the turn
     as suspicious (the answer is still evaluated, and its text is never shown to the composer).
 """
-import re
+import re_dev as re
 import unicodedata
 from dataclasses import dataclass
 from enum import Enum

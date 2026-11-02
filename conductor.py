@@ -26,7 +26,7 @@ The conductor is independent of LiveKit: `speak` is injected, so the whole flow 
 State lives on the runner, is changed only here (after a deterministic decision), and is persisted.
 """
 import asyncio
-import re
+import re_dev as re
 import logging
 import time
 from dataclasses import dataclass
@@ -54,7 +54,7 @@ _DURATION_Q = re.compile(r"\b(how long|how much time|duration|how many minutes|k
 _FORMAT_Q = re.compile(r"\b(how (?:does|will|is) (?:this|the interview|it) (?:work|go|going)|what (?:is|are) the (?:format|process|rules)|how does the interview|kaise (?:hoga|chalega)|कैसे (?:होगा|चलेगा))\b", re.I)
 
 
-_END_YES = re.compile(r"^\W*(?:yes|yeah|yep|yup|sure|ok|okay|please|end(?:\s+it)?|stop|go\s+ahead|that'?s\s+right|correct|confirm|haan|han|ha|ji|हाँ|हां|जी|ठीक\s+है)\b", re.I)
+_END_YES = re.compile(r"^\W*(?:yes|yeah|yep|yup|sure|ok|okay|please|end(?:\s+it)?|stop|go\s+ahead|that'?s\s+right|correct|confirm|haan|han|ha|ji|हाँ|हां|हा|जी|ठीक\s+है|बिलकुल|बिल्कुल|bilkul)\b", re.I)
 _END_NO = re.compile(r"^\W*(?:no|nope|nah|don'?t|do\s+not|not\s+yet|continue|keep\s+going|carry\s+on|never\s*mind|sorry|nahi|nahin|नहीं|नही|मत)\b", re.I)
 
 

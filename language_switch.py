@@ -6,7 +6,7 @@ words - so nothing the candidate says can inject text into later prompts. It mus
 the candidate ("I speak Hindi", "I built a Hindi chatbot", "my English is weak") or on long answers that merely
 mention a language, so it needs a clear request cue and a short utterance.
 """
-import re
+import re_dev as re
 
 MAX_WORDS = 14                      # a request is short; a paragraph that mentions Hindi is an answer
 MAX_WORDS_EXPLICIT = 40             # ...unless it is an unmistakable instruction ("I am asking you to speak in ...")
