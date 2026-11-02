@@ -87,3 +87,28 @@ PLAIN_LANGUAGE_INSTRUCTIONS = (
 
 def normalize_language(language: str | None) -> str:
     return language if language in LANGUAGE_CONFIGS else DEFAULT_LANGUAGE
+
+
+# Which of our interview languages each voice can actually SPEAK. Kept here (pure data) so the API can publish it and the
+# join screen can offer only languages that will work, and the worker can use the same rule.
+ELEVENLABS_ENGLISH_ONLY_MODELS = frozenset({"eleven_monolingual_v1", "eleven_turbo_v2", "eleven_flash_v2"})
+# ElevenLabs v3 covers all of them; the v2.5 models only Tamil beyond English and Hindi. (Sarvam covers every language.)
+ELEVENLABS_V25_LANGUAGES = frozenset({"en", "hi", "hinglish", "ta"})
+
+
+def languages_for_provider(provider: str, model: str = "") -> frozenset[str]:
+    if provider == "elevenlabs":
+        if (model or "") in ELEVENLABS_ENGLISH_ONLY_MODELS:
+            return frozenset({"en"})
+        return frozenset(LANGUAGE_CONFIGS) if (model or "") == "eleven_v3" else ELEVENLABS_V25_LANGUAGES
+    return frozenset(LANGUAGE_CONFIGS)
+
+
+def fallback_language(language: str, supported) -> str:
+    """The language to use when the one asked for cannot be spoken: the closest one that can."""
+    if language in supported:
+        return language
+    for candidate in ("hinglish", "hi", "en"):          # a candidate who picked an Indian language most likely follows Hindi
+        if candidate in supported:
+            return candidate
+    return DEFAULT_LANGUAGE
