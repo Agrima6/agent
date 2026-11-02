@@ -235,9 +235,9 @@ LANGUAGE_ALREADY = {
 # Spoken when the candidate asks for, or is transcribed in, a language this interview does not support. Fixed text:
 # nothing the candidate said is echoed, and the interview stays in the language it was in.
 UNSUPPORTED_LANGUAGE = {
-    "en": "I can't conduct this interview in that language. It can be in English, Hindi, Hinglish, Punjabi, Tamil, Telugu, Bengali, Marathi, Gujarati, Kannada or Malayalam. Please continue in one of those, and I'll repeat the question.",
-    "hi": "मैं यह इंटरव्यू उस भाषा में नहीं ले सकता। यह अंग्रेज़ी, हिंदी, हिंग्लिश, पंजाबी, तमिल, तेलुगु, बंगाली, मराठी, गुजराती, कन्नड़ या मलयालम में हो सकता है। कृपया इनमें से किसी एक में जारी रखिए, मैं सवाल दोहरा दूँगा।",
-    "hinglish": "मैं ये interview उस language में नहीं ले सकता। ये English, Hindi, Hinglish, Punjabi, Tamil, Telugu, Bengali, Marathi, Gujarati, Kannada या Malayalam में हो सकता है। please इनमें से किसी एक में बोलिए, मैं question repeat कर दूँगा।",
+    "en": "I can't conduct this interview in that language. I can use {languages}. Please continue in one of those, and I'll repeat the question.",
+    "hi": "मैं यह इंटरव्यू उस भाषा में नहीं ले सकता। मैं {languages} में ले सकता हूँ। कृपया इनमें से किसी एक में जारी रखिए, मैं सवाल दोहरा दूँगा।",
+    "hinglish": "मैं ये interview उस language में नहीं ले सकता। मैं {languages} में ले सकता हूँ। please इनमें से किसी एक में बोलिए, मैं question repeat कर दूँगा।",
 }
 # Spoken when the transcript is in a script no supported language uses (the recogniser mis-heard, or the candidate
 # spoke an unsupported language): ask them to say it again rather than evaluating or quoting the garbled text.
@@ -280,6 +280,14 @@ MOVE_ON = {
     "hi": "आइए एक दूसरा सवाल देखते हैं।",
     "hinglish": "आइए एक दूसरा question देखते हैं।",
 }
+
+
+def unsupported_language(language: str | None, supported=None) -> str:
+    """The reply to a request for a language this interview cannot use, naming only the languages that CAN be used right now
+    (they depend on the voice provider and model), never ones that would be refused too."""
+    from languages import LANGUAGE_CONFIGS
+    codes = [c for c in LANGUAGE_CONFIGS if not supported or c in supported]
+    return UNSUPPORTED_LANGUAGE[_lang(language)].format(languages=", ".join(LANGUAGE_CONFIGS[c]["label"] for c in codes))
 
 
 def _lang(language: str | None) -> str:
@@ -492,7 +500,7 @@ def fixed_phrases(language: str | None, *, essential_only: bool = False) -> list
     else:
         lines = [text for variants in refusals.values() for text in variants]
     lines += [MOVE_ON[lang], READY_TO_BEGIN[lang], CLOSING[lang], EARLY_END[lang],
-              UNSUPPORTED_LANGUAGE[lang], DIDNT_CATCH_LANGUAGE[lang], IDLE_NUDGE[lang], AUDIO_TROUBLE[lang],
+              unsupported_language(lang), DIDNT_CATCH_LANGUAGE[lang], IDLE_NUDGE[lang], AUDIO_TROUBLE[lang],
               ACK_PRESENCE[lang], ACK_NEED_TIME[lang], PLEASE_CONTINUE[lang], LANGUAGE_ALREADY[lang], END_CONFIRM[lang], END_CANCELLED[lang]]
     lines += [READINESS_ASK[lang], CLARIFY_MORE[lang], ENV_ASK[lang]]
     if not essential_only:

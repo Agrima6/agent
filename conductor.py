@@ -503,7 +503,7 @@ class InterviewConductor:
         self._event("unsupported_language", requested=requested)
         in_question = q is not None and not r.in_preflight and q.get("question_text")
         if requested:
-            spoken = refusals.UNSUPPORTED_LANGUAGE[self.language]
+            spoken = refusals.unsupported_language(self.language, self.supported_languages)
             if in_question:
                 spoken = f"{spoken} {r.last_question_text or q['question_text']}"
         else:
