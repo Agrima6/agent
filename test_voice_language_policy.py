@@ -98,7 +98,7 @@ async def test_a_request_for_an_unsupported_language_stays_in_the_language_and_r
     h = harness_factory(language="en", evaluations=[], composer_responses=[])
     last = await h.say("Can I speak in Urdu?")
     assert h.conductor.language == "en" and h.runner.idx == 0
-    assert refusals.UNSUPPORTED_LANGUAGE["en"] in last.text and Q1["question_text"] in last.text
+    assert refusals.unsupported_language("en", h.conductor.supported_languages) in last.text and Q1["question_text"] in last.text
     assert h.judge_calls == [] and h.posted("language") == []              # nothing saved as a language change
     assert h.posted("turns")[0]["intent"] == "unsupported_language"
 
@@ -107,7 +107,7 @@ async def test_a_voice_that_cannot_speak_hindi_refuses_the_switch_instead_of_att
     h = harness_factory(language="en", evaluations=[], composer_responses=[])
     h.conductor.supported_languages = frozenset({"en"})
     last = await h.say("Can you speak in Hindi to me please?")
-    assert h.conductor.language == "en" and last.text.startswith(refusals.UNSUPPORTED_LANGUAGE["en"])
+    assert h.conductor.language == "en" and last.text.startswith(refusals.unsupported_language("en", h.conductor.supported_languages))
     assert h.posted("language") == []
 
 
@@ -291,3 +291,9 @@ async def test_two_interviews_in_one_process_never_share_turn_state(harness_fact
     assert b.runner.idx == 0 and b.conductor.language == "hi"           # only language changed
     assert a.conductor.turns is not b.conductor.turns
     assert a.runner.state.answer_parts == [] and b.runner.state.answer_parts == []
+
+
+def test_the_refusal_names_only_the_languages_the_voice_can_speak():
+    text = refusals.unsupported_language("en", frozenset({"en", "hi", "hinglish", "ta"}))
+    assert "Tamil" in text and "Punjabi" not in text and "{" not in text
+    assert "Punjabi" in refusals.unsupported_language("en")
