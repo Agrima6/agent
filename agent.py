@@ -207,6 +207,9 @@ ELEVENLABS_ENGLISH_ONLY_MODELS = frozenset({"eleven_monolingual_v1", "eleven_tur
 # the text of each sentence (the cause of an English sentence being read with Urdu-style pronunciation, and of
 # romanised Hindi being read as English).
 ELEVENLABS_LANGUAGE_CODE_MODELS = frozenset({"eleven_flash_v2_5", "eleven_turbo_v2_5", "eleven_v3"})
+# Of our interview languages, the ones each ElevenLabs model can speak: v3 covers all of them, the v2.5 models only Tamil
+# beyond English and Hindi. (Sarvam covers every language.)
+ELEVENLABS_V25_LANGUAGES = frozenset({"en", "hi", "hinglish", "ta"})
 
 
 def stt_options_for(language: str, auto_language: bool) -> dict:
@@ -231,7 +234,11 @@ def is_candidate_identity(identity: str) -> bool:
 
 def elevenlabs_language(language: str) -> str:
     """ISO 639-1 code ElevenLabs expects for an interview language (Hinglish is voiced as Hindi)."""
-    return "en" if language == "en" else "hi"
+    if language in ("en", "hi"):
+        return language
+    if language == "hinglish":
+        return "hi"
+    return LANGUAGE_CONFIGS[normalize_language(language)]["stt_language"]
 
 
 def supported_languages_for(provider: str, model: str = "") -> frozenset[str]:
@@ -240,7 +247,7 @@ def supported_languages_for(provider: str, model: str = "") -> frozenset[str]:
     if provider == "elevenlabs" and (model or "") in ELEVENLABS_ENGLISH_ONLY_MODELS:
         return frozenset({"en"})
     if provider == "elevenlabs":
-        return frozenset({"en", "hi", "hinglish"})       # the ElevenLabs path here is only wired for English and Hindi
+        return frozenset(LANGUAGE_CONFIGS) if (model or "") == "eleven_v3" else ELEVENLABS_V25_LANGUAGES
     return frozenset(LANGUAGE_CONFIGS)
 
 
