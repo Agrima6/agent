@@ -157,7 +157,8 @@ def test_an_english_only_model_fails_clearly_for_a_hindi_interview(monkeypatch, 
 
 def test_supported_languages_follow_the_provider_and_model():
     assert supported_languages_for("elevenlabs", "eleven_flash_v2") == frozenset({"en"})
-    assert supported_languages_for("elevenlabs", "eleven_flash_v2_5") == frozenset({"en", "hi", "hinglish"})
+    assert supported_languages_for("elevenlabs", "eleven_flash_v2_5") == frozenset({"en", "hi", "hinglish", "ta"})
+    assert "pa" in supported_languages_for("elevenlabs", "eleven_v3") and "pa" not in supported_languages_for("elevenlabs", "eleven_flash_v2_5")
     assert supported_languages_for("sarvam", "") == frozenset({"en", "hi", "hinglish", "pa", "ta", "te", "bn", "mr", "gu", "kn", "ml"})
 
 
