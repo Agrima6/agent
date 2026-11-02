@@ -235,9 +235,9 @@ LANGUAGE_ALREADY = {
 # Spoken when the candidate asks for, or is transcribed in, a language this interview does not support. Fixed text:
 # nothing the candidate said is echoed, and the interview stays in the language it was in.
 UNSUPPORTED_LANGUAGE = {
-    "en": "I can only conduct this interview in English, Hindi or Hinglish. Please continue in one of those, and I'll repeat the question.",
-    "hi": "मैं यह इंटरव्यू केवल अंग्रेज़ी, हिंदी या हिंग्लिश में ले सकता हूँ। कृपया इनमें से किसी एक में जवाब दीजिए, मैं सवाल दोबारा दोहराता हूँ।",
-    "hinglish": "मैं ये interview सिर्फ़ English, Hindi या Hinglish में ले सकता हूँ। please इनमें से किसी एक में बोलिए, मैं question repeat करता हूँ।",
+    "en": "I can't conduct this interview in that language. It can be in English, Hindi, Hinglish, Punjabi, Tamil, Telugu, Bengali, Marathi, Gujarati, Kannada or Malayalam. Please continue in one of those, and I'll repeat the question.",
+    "hi": "मैं यह इंटरव्यू उस भाषा में नहीं ले सकता। यह अंग्रेज़ी, हिंदी, हिंग्लिश, पंजाबी, तमिल, तेलुगु, बंगाली, मराठी, गुजराती, कन्नड़ या मलयालम में हो सकता है। कृपया इनमें से किसी एक में जारी रखिए, मैं सवाल दोहरा दूँगा।",
+    "hinglish": "मैं ये interview उस language में नहीं ले सकता। ये English, Hindi, Hinglish, Punjabi, Tamil, Telugu, Bengali, Marathi, Gujarati, Kannada या Malayalam में हो सकता है। please इनमें से किसी एक में बोलिए, मैं question repeat कर दूँगा।",
 }
 # Spoken when the transcript is in a script no supported language uses (the recogniser mis-heard, or the candidate
 # spoke an unsupported language): ask them to say it again rather than evaluating or quoting the garbled text.
@@ -501,3 +501,34 @@ def fixed_phrases(language: str | None, *, essential_only: bool = False) -> list
                   READINESS_RETRY[lang], READINESS_WAIT[lang], RESUME_LEAD[lang], RESUME_NEXT[lang],
                   ENV_RETRY[lang], ENV_CONTINUE[lang], ENV_RETRY_ASK[lang], MAIN_LEAD[lang]]
     return list(dict.fromkeys(lines))
+
+
+# ------------------------------------------------------------------------------------------------------------
+# Other Indian languages (i18n/<code>.py). Every table above is {language: text}; the catalogs add one entry per language.
+# A language that lacks a line falls back to the English one (never a KeyError mid-interview).
+# ------------------------------------------------------------------------------------------------------------
+class _Table(dict):
+    def __missing__(self, key):
+        return self["en"]
+
+
+def _install_catalogs() -> None:
+    from i18n import CATALOGS
+    g = globals()
+    for name, value in list(g.items()):
+        if isinstance(value, dict) and not isinstance(value, _Table) and name not in ("REFUSALS", "INTERVIEWER_NAMES", "PROCESS_ANSWERS") \
+                and isinstance(value.get("en"), str):
+            g[name] = _Table(value)
+    for kind, answers in PROCESS_ANSWERS.items():
+        PROCESS_ANSWERS[kind] = _Table(answers)
+    for code, lines in CATALOGS.items():
+        for name, value in lines.items():
+            if name.startswith("PROCESS_ANSWERS."):
+                PROCESS_ANSWERS[name.split(".", 1)[1]][code] = value
+            elif name == "REFUSALS":
+                REFUSALS[code] = {Intent[intent]: list(variants) for intent, variants in value.items()}
+            elif name in g and isinstance(g[name], _Table):
+                g[name][code] = value
+
+
+_install_catalogs()

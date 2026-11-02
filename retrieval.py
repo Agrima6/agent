@@ -37,7 +37,17 @@ def warm_embedding_cache(candidates: list[dict]) -> None:
 
 
 def metadata_filter(questions: list[dict], role_type: str) -> list[dict]:
-    """Role/status metadata filter — the first stage before any similarity math (plan §6)."""
+    """Role/status metadata filter — the first stage before any similarity math (plan §6).
+
+    A blue-collar role arrives as "blue_collar:<family>" (e.g. "blue_collar:security"). Those candidates are asked
+    their own family's questions first, then the generic blue-collar ones; the corporate "general" questions ("a time
+    you disagreed on a technical decision") are never used for them."""
+    base, _, family = role_type.partition(":")
+    if base == "blue_collar":
+        own = [q for q in questions if f"bc_{family}" in q.get("role_tags", [])] if family else []
+        generic = [q for q in questions if "blue_collar" in q.get("role_tags", []) and q not in own]
+        pool = own + generic if len(own) < 3 else own + generic[:2]
+        return pool or questions
     eligible = [q for q in questions
                 if role_type in q.get("role_tags", ["general"]) or "general" in q.get("role_tags", [])]
     return eligible if eligible else questions

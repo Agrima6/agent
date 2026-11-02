@@ -62,7 +62,10 @@ DEFAULT_GENDER = "female"
 
 SPEAKER_GENDER = {"ratan": "male", "shubh": "male", "aditya": "male", "ishita": "female", "priya": "female"}
 
-LANGUAGE_CODES = {"en": "en-IN", "hi": "hi-IN", "hinglish": "hi-IN"}
+from languages import LANGUAGE_CONFIGS
+
+# Every interview language -> its Sarvam language code (Hinglish is voiced as Hindi).
+LANGUAGE_CODES = {code: cfg["sarvam_language_code"] for code, cfg in LANGUAGE_CONFIGS.items()}
 
 # Last-resort voices (Edge TTS) used only if Sarvam is completely unreachable.
 EDGE_FALLBACK_VOICES = {
@@ -96,7 +99,7 @@ class VoiceConfig:
 
     @property
     def edge_voice(self) -> str:
-        lang = "hi" if self.language in ("hi", "hinglish") else "en"
+        lang = "en" if self.language == "en" else "hi"       # Edge has no voice for the other languages: the Hindi one is the last resort
         return EDGE_FALLBACK_VOICES[(lang, self.gender)]
 
 
@@ -143,7 +146,7 @@ def resolve_voice(language: str | None, gender: str | None = None, speaker: str 
     the interviewer with an API 400."""
     _warn_legacy_env_once()
     language = _norm_language(language)
-    lang_group = "hi" if language in ("hi", "hinglish") else "en"
+    lang_group = "en" if language == "en" else "hi"      # one multilingual Indian voice family; the language code selects the language
 
     speaker = (speaker or os.getenv("TTS_SPEAKER_OVERRIDE") or "").strip().lower() or None
     if speaker and speaker not in VALID_V3_SPEAKERS:

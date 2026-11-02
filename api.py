@@ -1,4 +1,5 @@
 import asyncio
+from languages import LANGUAGE_CONFIGS
 import datetime
 import hmac
 import json
@@ -428,7 +429,7 @@ def _agent_view(interview) -> dict:
     }
 
 
-SUPPORTED_LANGUAGES = {"en", "hi", "hinglish"}
+SUPPORTED_LANGUAGES = set(LANGUAGE_CONFIGS)
 
 
 @app.post("/v1/interviews/{interview_id}/voice", dependencies=[Depends(require_service_key)])

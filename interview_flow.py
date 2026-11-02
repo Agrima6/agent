@@ -15,7 +15,7 @@ This module decides three things and nothing else:
   * what a candidate's short reply means at a given stage (interpret) - deterministic, so readiness is never inferred
     from silence and a question is never mistaken for "yes".
 """
-import re
+import re_dev as re
 
 from interaction_guard import contains_injection
 
@@ -140,7 +140,7 @@ _READY = re.compile(
     r"\b(?:ready|let'?s\s+(?:start|begin|go|do\s+it)|go\s+ahead|start|begin|proceed|carry\s+on|continue|shuru|shuru\s+karo|"
     r"chalo|chaliye|chalte\s+hain|tayyar|taiyaar|तैयार|शुरू|चलिए|चलो|चलते\s+हैं)\b"
     r"|^\s*(?:yes|yeah|yep|yup|yea|sure|ok|okay|alright|all\s+right|absolutely|definitely|of\s+course|fine|good|haan|han|ha|ji|"
-    r"jee|theek\s+hai|thik\s+hai|bilkul|हाँ|हां|जी|ठीक\s+है|बिलकुल|बिल्कुल)\b", re.I)
+    r"jee|theek\s+hai|thik\s+hai|bilkul|हाँ|हां|हा|जी|ठीक\s+है|बिलकुल|बिल्कुल)\b", re.I)
 
 _QUIET_NO = re.compile(
     r"\b(?:noisy|noise|loud|crowded|not\s+(?:very\s+|really\s+)?(?:a\s+)?quiet|traffic|construction|people\s+around|"
@@ -197,7 +197,7 @@ def interpret(stage: str, text: str) -> str:
         return "NOT_READY"
     if explicit_ready:
         return "READY"
-    if re.match(r"^\s*(?:yes|yeah|yep|yup|yea|haan|han|ha|ji|हाँ|हां|जी)\b[\s,.!]*$", t, re.I):
+    if re.match(r"^\s*(?:yes|yeah|yep|yup|yea|haan|han|ha|ji|हाँ|हां|हा|जी)\b[\s,.!]*$", t, re.I):
         return "HAS_QUESTION"
     # A statement of substance ("I wanted to know about the timing") is treated as a pending question, never as a go-ahead.
     return "QUESTION" if len(_WORD.findall(t.lower())) >= 4 else "UNCLEAR"

@@ -116,6 +116,11 @@ _FALLBACK_FOLLOWUP = {
 }
 
 
+for _code, _lines in __import__("i18n").CATALOGS.items():
+    if "FALLBACK_FOLLOWUP" in _lines:
+        _FALLBACK_FOLLOWUP[_code] = _lines["FALLBACK_FOLLOWUP"]
+
+
 @dataclass
 class ComposeRequest:
     action: Action
@@ -332,7 +337,7 @@ class Composer:
         return spoken, ""
 
     def _fallback_followup(self, req: ComposeRequest, kind: str) -> str:
-        templates = _FALLBACK_FOLLOWUP[req.language]
+        templates = _FALLBACK_FOLLOWUP.get(req.language) or _FALLBACK_FOLLOWUP["en"]
         target = req.target or question_topic(req.question)
         if kind == "depth":
             return templates["depth"].format(target=target) if target else templates["generic"]

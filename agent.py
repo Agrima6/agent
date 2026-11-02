@@ -219,6 +219,8 @@ def stt_options_for(language: str, auto_language: bool) -> dict:
     is still heard (and then guarded by the script policy)."""
     if language in ("hi", "hinglish"):
         return {"language": "hi", "detect_language": False}
+    if language != "en":
+        return {"language": LANGUAGE_CONFIGS[normalize_language(language)]["stt_language"], "detect_language": False}
     return {"language": "en", "detect_language": bool(auto_language)}
 
 
@@ -237,6 +239,8 @@ def supported_languages_for(provider: str, model: str = "") -> frozenset[str]:
     clear message instead of being attempted with a voice that cannot pronounce it."""
     if provider == "elevenlabs" and (model or "") in ELEVENLABS_ENGLISH_ONLY_MODELS:
         return frozenset({"en"})
+    if provider == "elevenlabs":
+        return frozenset({"en", "hi", "hinglish"})       # the ElevenLabs path here is only wired for English and Hindi
     return frozenset(LANGUAGE_CONFIGS)
 
 
