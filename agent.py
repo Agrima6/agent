@@ -30,7 +30,7 @@ from livekit.plugins import silero
 
 from conductor import InterviewConductor, Speech
 from config import (AGENT_NAME, AGENT_SERVICE_KEY, API_BASE_URL, ELEVENLABS_API_KEY, ELEVENLABS_MODEL, ELEVENLABS_PRONUNCIATION_DICTIONARY_ID,
-                    ELEVENLABS_PRONUNCIATION_VERSION_ID, ELEVENLABS_VOICE_ID, ELEVENLABS_VOICE_ID_FEMALE,
+                    ELEVENLABS_PRONUNCIATION_VERSION_ID, ELEVENLABS_STABILITY, ELEVENLABS_VOICE_ID, ELEVENLABS_VOICE_ID_FEMALE,
                     ELEVENLABS_VOICE_ID_MALE, GROQ_API_KEY, AUTO_LANGUAGE,
                     OPENAI_API_KEY, SARVAM_API_KEY, TTS_PROVIDER, TTS_VOICE, VOICE_PROVIDER_FALLBACK)
 from edge_tts_plugin import EdgeTTS
@@ -275,7 +275,8 @@ def build_tts(voice: VoiceConfig) -> tuple[tts.TTS, SarvamTTS | None]:
             per_gender = ELEVENLABS_VOICE_ID_FEMALE if voice.gender == "female" else ELEVENLABS_VOICE_ID_MALE
             return ElevenLabsDialogueTTS(api_key=ELEVENLABS_API_KEY, model=ELEVENLABS_MODEL,
                                          voice_id=per_gender or ELEVENLABS_VOICE_ID or lk_elevenlabs.tts.DEFAULT_VOICE_ID,
-                                         language=elevenlabs_language(voice.language)), None
+                                         language=elevenlabs_language(voice.language),
+                                         stability=ELEVENLABS_STABILITY), None
         options = {"api_key": ELEVENLABS_API_KEY, "model": ELEVENLABS_MODEL}
         if ELEVENLABS_MODEL in ELEVENLABS_LANGUAGE_CODE_MODELS:
             options["language"] = elevenlabs_language(voice.language)

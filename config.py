@@ -37,6 +37,9 @@ ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "")        # empty = the 
 ELEVENLABS_VOICE_ID_MALE = os.getenv("ELEVENLABS_VOICE_ID_MALE", "")
 ELEVENLABS_VOICE_ID_FEMALE = os.getenv("ELEVENLABS_VOICE_ID_FEMALE", "")
 ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_flash_v2_5")
+# Eleven v3 / v4 only: 0.0 (most expressive) to 1.0 (most consistent). Higher keeps the accent and delivery the same from one
+# sentence to the next; empty = ElevenLabs' own default (0.5).
+ELEVENLABS_STABILITY = float(os.getenv("ELEVENLABS_STABILITY") or 0) if (os.getenv("ELEVENLABS_STABILITY") or "").strip() else None
 # Optional ElevenLabs pronunciation dictionary (technical terms, product and company names, acronyms). Both values
 # come from the dictionary created in the ElevenLabs dashboard; with either missing, none is used.
 ELEVENLABS_PRONUNCIATION_DICTIONARY_ID = os.getenv("ELEVENLABS_PRONUNCIATION_DICTIONARY_ID", "")
