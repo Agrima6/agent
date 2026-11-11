@@ -35,7 +35,8 @@ from config import (AGENT_NAME, AGENT_SERVICE_KEY, API_BASE_URL, ELEVENLABS_API_
                     OPENAI_API_KEY, SARVAM_API_KEY, TTS_PROVIDER, TTS_VOICE, VOICE_PROVIDER_FALLBACK)
 from edge_tts_plugin import EdgeTTS
 from language_policy import STT_VOCABULARY_HINT, clean_transcript, noise_reason
-from languages import (ELEVENLABS_ENGLISH_ONLY_MODELS, ELEVENLABS_V25_LANGUAGES, LANGUAGE_CONFIGS, fallback_language,
+from elevenlabs_dialogue_plugin import ElevenLabsDialogueTTS
+from languages import (ELEVENLABS_DIALOGUE_MODELS, ELEVENLABS_ENGLISH_ONLY_MODELS, ELEVENLABS_V25_LANGUAGES, LANGUAGE_CONFIGS, fallback_language,
                        languages_for_provider, normalize_language, provider_for_language)
 import refusals
 import turn_trace
@@ -209,7 +210,7 @@ class VoiceProviderError(RuntimeError):
 # Models that accept an explicit language code. For these the language is PINNED, so the engine does not guess it from
 # the text of each sentence (the cause of an English sentence being read with Urdu-style pronunciation, and of
 # romanised Hindi being read as English).
-ELEVENLABS_LANGUAGE_CODE_MODELS = frozenset({"eleven_flash_v2_5", "eleven_turbo_v2_5", "eleven_v3"})
+ELEVENLABS_LANGUAGE_CODE_MODELS = frozenset({"eleven_flash_v2_5", "eleven_turbo_v2_5", "eleven_v3"}) | ELEVENLABS_DIALOGUE_MODELS
 
 
 def stt_options_for(language: str, auto_language: bool) -> dict:
@@ -269,6 +270,12 @@ def build_tts(voice: VoiceConfig) -> tuple[tts.TTS, SarvamTTS | None]:
             raise VoiceProviderError(
                 f"ElevenLabs model '{ELEVENLABS_MODEL}' only speaks English but this interview is in "
                 f"{voice.language}. Set ELEVENLABS_MODEL to a multilingual model (e.g. eleven_flash_v2_5).")
+        if ELEVENLABS_MODEL in ELEVENLABS_DIALOGUE_MODELS:
+            # v3 Conversational / v4: all Indian languages, through the Text to Dialogue WebSocket.
+            per_gender = ELEVENLABS_VOICE_ID_FEMALE if voice.gender == "female" else ELEVENLABS_VOICE_ID_MALE
+            return ElevenLabsDialogueTTS(api_key=ELEVENLABS_API_KEY, model=ELEVENLABS_MODEL,
+                                         voice_id=per_gender or ELEVENLABS_VOICE_ID or lk_elevenlabs.tts.DEFAULT_VOICE_ID,
+                                         language=elevenlabs_language(voice.language)), None
         options = {"api_key": ELEVENLABS_API_KEY, "model": ELEVENLABS_MODEL}
         if ELEVENLABS_MODEL in ELEVENLABS_LANGUAGE_CODE_MODELS:
             options["language"] = elevenlabs_language(voice.language)
