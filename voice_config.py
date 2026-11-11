@@ -153,10 +153,16 @@ def resolve_voice(language: str | None, gender: str | None = None, speaker: str 
         logger.warning("Unknown bulbul:v3 speaker %r - using the calibrated default instead", speaker)
         speaker = None
 
-    gender = _norm_gender(gender) or _norm_gender(os.getenv("TTS_GENDER")) or SPEAKER_GENDER.get(speaker or "")
+    # TTS_FORCE_GENDER pins every interview to one gender (and so one interviewer name), whatever a drive or candidate asks for.
+    gender = (_norm_gender(os.getenv("TTS_FORCE_GENDER")) or _norm_gender(gender) or _norm_gender(os.getenv("TTS_GENDER"))
+              or SPEAKER_GENDER.get(speaker or ""))
     gender = gender or DEFAULT_GENDER
+    forced = _norm_gender(os.getenv("TTS_FORCE_GENDER"))
+    if forced and speaker and SPEAKER_GENDER.get(speaker, forced) != forced:
+        speaker = None                       # a speaker of the other gender is dropped, not mislabelled
     speaker = speaker or DEFAULT_SPEAKERS[(lang_group, gender)]
-    gender = SPEAKER_GENDER.get(speaker, gender)
+    if not _norm_gender(os.getenv("TTS_FORCE_GENDER")):
+        gender = SPEAKER_GENDER.get(speaker, gender)
 
     pace_override = pace if pace is not None else os.getenv("TTS_PACE_OVERRIDE")
     if pace_override not in (None, ""):
