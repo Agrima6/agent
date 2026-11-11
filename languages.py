@@ -96,11 +96,21 @@ ELEVENLABS_ENGLISH_ONLY_MODELS = frozenset({"eleven_monolingual_v1", "eleven_tur
 ELEVENLABS_V25_LANGUAGES = frozenset({"en", "hi", "hinglish", "ta"})
 
 
+# Eleven v3 Conversational / v4 speak every Indian language here, and run in real time through ElevenLabs' Text to
+# Dialogue WebSocket (elevenlabs_dialogue_plugin.py) - the plain Text to Speech WebSocket still rejects them. Opt in by
+# setting ELEVENLABS_MODEL to one of these.
+ELEVENLABS_DIALOGUE_MODELS = frozenset({"eleven_v3_conversational", "eleven_v4_turbo", "eleven_v4"})
+
+
 def languages_for_provider(provider: str, model: str = "") -> frozenset[str]:
     """What ONE provider's voice speaks. ElevenLabs v3 is deliberately not treated as multilingual here: it rejects the
-    streaming connection the live interview needs (HTTP 400), so every non-English-only ElevenLabs model gets the v2.5 set."""
+    streaming connection the live interview needs (HTTP 400), so every non-English-only ElevenLabs model gets the v2.5 set.
+    The exception is Eleven v3 Conversational / v4, which have their own real-time path (ELEVENLABS_DIALOGUE_MODELS)."""
     if provider == "elevenlabs":
-        return frozenset({"en"}) if (model or "") in ELEVENLABS_ENGLISH_ONLY_MODELS else ELEVENLABS_V25_LANGUAGES
+        model = model or ""
+        if model in ELEVENLABS_DIALOGUE_MODELS:
+            return frozenset(LANGUAGE_CONFIGS)
+        return frozenset({"en"}) if model in ELEVENLABS_ENGLISH_ONLY_MODELS else ELEVENLABS_V25_LANGUAGES
     return frozenset(LANGUAGE_CONFIGS)
 
 
