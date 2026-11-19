@@ -222,7 +222,7 @@ def generate_resume_question(evidence_profile: dict, role_name: str, role_compet
 def _build_plan_with_hr_questions(role_competencies: list[dict], role_name: str, evidence_profile: dict,
                                    min_questions: int, cached_dynamic_questions: list[dict] | None,
                                    hr_questions: list[dict], avoid_ids: set[str] | None = None,
-                                   avoid_texts: list[str] | None = None) -> dict:
+                                   avoid_texts: list[str] | None = None, only_hr: bool = False) -> dict:
     """Question priority: HR-configured questions (verbatim, in HR's order) -> resume-based ->
     role-tailored generated -> question bank. Generated questions only fill slots HR left open and
     are skipped if they ask essentially the same thing as a question already in the plan, so HR's
@@ -234,7 +234,7 @@ def _build_plan_with_hr_questions(role_competencies: list[dict], role_name: str,
         *hr_questions,
     ]
     target_entries = max(min_questions, 4) + 1
-    fill = max(0, target_entries - len(questions))
+    fill = 0 if only_hr else max(0, target_entries - len(questions))    # only_hr: ask exactly what HR wrote
     included_texts = [q["question_text"] for q in questions if q.get("question_text")] + list(avoid_texts or [])
 
     def add_if_new(q: dict) -> bool:
@@ -445,7 +445,8 @@ def build_interview_plan(role_competencies: list[dict], role_name: str, evidence
                           cached_dynamic_questions: list[dict] | None = None,
                           hr_questions: list[dict] | None = None,
                           focus_areas: list[FocusArea] | None = None,
-                          avoid_ids: set[str] | None = None, avoid_texts: list[str] | None = None) -> dict:
+                          avoid_ids: set[str] | None = None, avoid_texts: list[str] | None = None,
+                          only_hr: bool = False) -> dict:
     """cached_dynamic_questions: role-level LLM-generated questions (see Role.generated_questions)
     reused across every candidate for this role, so scores stay fairly comparable across
     candidates instead of each person facing a different random set of questions.
@@ -455,7 +456,9 @@ def build_interview_plan(role_competencies: list[dict], role_name: str, evidence
     areas = focus_areas if focus_areas is not None else build_focus_areas(None, role_competencies)
     if hr_questions:
         base = _build_plan_with_hr_questions(role_competencies, role_name, evidence_profile, min_questions,
-                                             cached_dynamic_questions, hr_questions, avoid_ids, avoid_texts)
+                                             cached_dynamic_questions, hr_questions, avoid_ids, avoid_texts, only_hr)
+        if only_hr:
+            return base       # exactly HR's questions: no resume-validation or focus questions are layered on
         return apply_interview_intelligence(base, role_name=role_name, role_competencies=role_competencies,
                                             evidence_profile=evidence_profile, areas=areas)
     base = _build_standard_plan(role_competencies, role_name, evidence_profile, min_questions, max_questions,

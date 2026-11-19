@@ -464,13 +464,21 @@ async def entrypoint(ctx: JobContext):
                 await asyncio.sleep(0.25)
             logger.warning("no candidate joined %s within %.0fs - greeting anyway", ctx.room.name, CANDIDATE_WAIT_S)
 
+        # What the hiring team allows narrows what the voice can speak. With switching off, the interview stays in the
+        # language it started in: a candidate who asks for another is refused politely, like any unsupported language.
+        spoken_languages = supported_languages_for(voice_provider, ELEVENLABS_MODEL)
+        allowed_by_hr = frozenset(data.get("allowed_languages") or ())
+        if allowed_by_hr:
+            spoken_languages = frozenset(spoken_languages & allowed_by_hr) | {language}
+        if data.get("allow_language_switch") is False:
+            spoken_languages = frozenset({language})
         interviewer = InterviewerAgent(runner, language=language, role=role_name,
                                        experience_level=data.get("experience_level") or "",
                                        plain_language=plain_language,
                                        interviewer_name=INTERVIEWER_NAMES.get(voice.gender, "Aarav"),
                                        publish=publish_transcript, candidate_ready=wait_for_candidate,
                                        on_language_change=apply_language, auto_language=AUTO_LANGUAGE,
-                                       supported_languages=supported_languages_for(voice_provider, ELEVENLABS_MODEL))
+                                       supported_languages=spoken_languages)
 
         def on_participant_connected(participant) -> None:
             if participant.kind != rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD:

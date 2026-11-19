@@ -298,6 +298,8 @@ def create_interview(candidate_id: str = Form(...), role_id: str = Form(...),
                       duration_minutes: int = Form(30),
                       hr_questions: str = Form(""), questions_json: str = Form(""),
                       focus_areas: str = Form(""),
+                      allowed_languages: str = Form(""), allow_language_switch: bool = Form(True),
+                      only_hr_questions: bool = Form(False),
                       experience_level: str = Form(""),
                       max_followups_per_question: int | None = Form(None),
                       coverage_threshold: float | None = Form(None),
@@ -317,6 +319,10 @@ def create_interview(candidate_id: str = Form(...), role_id: str = Form(...),
     if coverage_threshold is not None and not 0.3 <= coverage_threshold <= 0.95:
         raise HTTPException(422, "coverage_threshold must be between 0.3 and 0.95")
     voice_fields = _validated_voice(voice_gender, voice_speaker, voice_pace)
+    allowed = [c for c in dict.fromkeys(x.strip() for x in allowed_languages.split(",")) if c]
+    bad = [c for c in allowed if c not in SUPPORTED_LANGUAGES]
+    if bad:
+        raise HTTPException(422, f"allowed_languages has unknown languages: {bad}")
     try:
         voice_provider = voice_settings.resolve_for_new_interview(db)    # fixed for this interview from now on
     except voice_settings.VoiceSettingsError as exc:
@@ -336,6 +342,7 @@ def create_interview(candidate_id: str = Form(...), role_id: str = Form(...),
         focus_areas=focus_list,
         avoid_ids=avoid_ids,
         avoid_texts=avoid_texts,
+        only_hr=bool(only_hr_questions and hr_question_list),
     )
 
     extra = {}
@@ -352,6 +359,8 @@ def create_interview(candidate_id: str = Form(...), role_id: str = Form(...),
         status=states.CREATED,
         experience_level=(experience_level.strip()[:80] or None),
         depth_probe_enabled=int(depth_probe_enabled),
+        allowed_languages=allowed or None, allow_language_switch=int(allow_language_switch),
+        only_hr_questions=int(bool(only_hr_questions and hr_question_list)),
         **voice_fields,
         **extra,
     )
@@ -411,6 +420,8 @@ def _agent_view(interview) -> dict:
         "id": interview.id, "status": interview.status, "room_name": interview.room_name,
         "plan": interview.plan, "candidate": interview.candidate.name, "role": interview.role.name,
         "language": interview.language,
+        "allowed_languages": interview.allowed_languages or [],
+        "allow_language_switch": bool(interview.allow_language_switch if interview.allow_language_switch is not None else 1),
         # Exposed so the agent can wire the HR-configured threshold instead of a hardcoded
         # default (Workmate_production_scalable_fix_plan_v2.md #5), and so it can fence
         # in-flight LLM/TTS results against the authoritative server-side state (#2).
@@ -513,6 +524,8 @@ def set_interview_language(interview_id: str, language: str = Form(...), x_agent
     interview = db.get(Interview, interview_id)
     if not interview:
         raise HTTPException(404, "not found")
+    if interview.allowed_languages and language not in interview.allowed_languages:
+        raise HTTPException(422, "that language is not offered for this interview")
     if interview.status not in _PRE_START_STATES:
         require_service_key(x_agent_key)
     interview.language = language
