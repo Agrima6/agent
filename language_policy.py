@@ -159,6 +159,16 @@ _SILENCE_PHRASES = ("thanks for watching", "thank you for watching", "please sub
                     "[applause]", "(music)", "♪")
 
 
+_TAGS = re.compile(r"<[^>\n]{0,40}>|\[[^\]\n]{0,40}\]|\([^)\n]{0,40}\)")
+
+
+def only_non_speech_tags(text: str) -> bool:
+    """True when nothing but markers is left once tags like "<lhil>", "[BLANK_AUDIO]", "(noise)" and "<|nospeech|>" are
+    removed. Recognisers print these for sounds that are not speech (a fan, a keyboard, a chair); they are not words."""
+    rest = _TAGS.sub(" ", text or "")
+    return not any(ch.isalpha() for ch in rest) and bool(_TAGS.search(text or ""))
+
+
 def noise_reason(text: str) -> str | None:
     """Why this transcript is recogniser noise rather than something the candidate said, or None.
 
@@ -167,6 +177,8 @@ def noise_reason(text: str) -> str | None:
     if not stripped:
         return "empty"
     lowered = stripped.lower()
+    if only_non_speech_tags(stripped):
+        return "non-speech-tags"
     if len(_norm_words(stripped)) <= 14 and any(p in lowered for p in _SILENCE_PHRASES):
         return "silence-hallucination"
     if is_prompt_echo(stripped):
