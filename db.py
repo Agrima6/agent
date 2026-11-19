@@ -43,6 +43,11 @@ class Interview(Base):
     candidate_id = Column(String, ForeignKey("candidates.id"))
     role_id = Column(String, ForeignKey("roles.id"))
     language = Column(String, default="en")
+    # What the hiring team allows: the languages the interview may be spoken in (empty = every supported one) and whether
+    # the candidate may switch language during the interview. "Only HR's questions" stops the planner adding its own.
+    allowed_languages = Column(JSON)
+    allow_language_switch = Column(Integer, default=1)
+    only_hr_questions = Column(Integer, default=0)
     duration_minutes = Column(Integer, default=30)
     min_questions = Column(Integer, default=4)
     max_questions = Column(Integer, default=7)
@@ -187,6 +192,7 @@ _COLUMN_PATCHES: dict[str, dict[str, str]] = {
         "depth_probe_enabled": "INTEGER DEFAULT 1", "experience_level": "VARCHAR",
         "voice_gender": "VARCHAR", "voice_speaker": "VARCHAR", "voice_pace": "FLOAT",
         "voice_used": "JSON", "progress": "JSON", "voice_provider": "VARCHAR",
+        "allowed_languages": "JSON", "allow_language_switch": "INTEGER DEFAULT 1", "only_hr_questions": "INTEGER DEFAULT 0",
     },
     "reports": {"status": f"VARCHAR DEFAULT '{REPORT_READY}'", "error": "TEXT"},
     "interview_turns": {"intent": "VARCHAR", "action": "VARCHAR"},

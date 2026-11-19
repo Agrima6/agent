@@ -30,7 +30,7 @@ from livekit.plugins import silero
 
 from conductor import InterviewConductor, Speech
 from config import (AGENT_NAME, AGENT_SERVICE_KEY, API_BASE_URL, ELEVENLABS_API_KEY, ELEVENLABS_MODEL, ELEVENLABS_PRONUNCIATION_DICTIONARY_ID,
-                    ELEVENLABS_PRONUNCIATION_VERSION_ID, ELEVENLABS_VOICE_ID, ELEVENLABS_VOICE_ID_FEMALE,
+                    ELEVENLABS_PRONUNCIATION_VERSION_ID, ELEVENLABS_STABILITY, ELEVENLABS_VOICE_ID, ELEVENLABS_VOICE_ID_FEMALE,
                     ELEVENLABS_VOICE_ID_MALE, GROQ_API_KEY, AUTO_LANGUAGE,
                     OPENAI_API_KEY, SARVAM_API_KEY, TTS_PROVIDER, TTS_VOICE, VOICE_PROVIDER_FALLBACK)
 from edge_tts_plugin import EdgeTTS
@@ -275,7 +275,8 @@ def build_tts(voice: VoiceConfig) -> tuple[tts.TTS, SarvamTTS | None]:
             per_gender = ELEVENLABS_VOICE_ID_FEMALE if voice.gender == "female" else ELEVENLABS_VOICE_ID_MALE
             return ElevenLabsDialogueTTS(api_key=ELEVENLABS_API_KEY, model=ELEVENLABS_MODEL,
                                          voice_id=per_gender or ELEVENLABS_VOICE_ID or lk_elevenlabs.tts.DEFAULT_VOICE_ID,
-                                         language=elevenlabs_language(voice.language)), None
+                                         language=elevenlabs_language(voice.language),
+                                         stability=ELEVENLABS_STABILITY), None
         options = {"api_key": ELEVENLABS_API_KEY, "model": ELEVENLABS_MODEL}
         if ELEVENLABS_MODEL in ELEVENLABS_LANGUAGE_CODE_MODELS:
             options["language"] = elevenlabs_language(voice.language)
@@ -463,13 +464,21 @@ async def entrypoint(ctx: JobContext):
                 await asyncio.sleep(0.25)
             logger.warning("no candidate joined %s within %.0fs - greeting anyway", ctx.room.name, CANDIDATE_WAIT_S)
 
+        # What the hiring team allows narrows what the voice can speak. With switching off, the interview stays in the
+        # language it started in: a candidate who asks for another is refused politely, like any unsupported language.
+        spoken_languages = supported_languages_for(voice_provider, ELEVENLABS_MODEL)
+        allowed_by_hr = frozenset(data.get("allowed_languages") or ())
+        if allowed_by_hr:
+            spoken_languages = frozenset(spoken_languages & allowed_by_hr) | {language}
+        if data.get("allow_language_switch") is False:
+            spoken_languages = frozenset({language})
         interviewer = InterviewerAgent(runner, language=language, role=role_name,
                                        experience_level=data.get("experience_level") or "",
                                        plain_language=plain_language,
                                        interviewer_name=INTERVIEWER_NAMES.get(voice.gender, "Aarav"),
                                        publish=publish_transcript, candidate_ready=wait_for_candidate,
                                        on_language_change=apply_language, auto_language=AUTO_LANGUAGE,
-                                       supported_languages=supported_languages_for(voice_provider, ELEVENLABS_MODEL))
+                                       supported_languages=spoken_languages)
 
         def on_participant_connected(participant) -> None:
             if participant.kind != rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD:

@@ -382,7 +382,18 @@ def test_elevenlabs_uses_the_voice_for_the_interviewers_gender(monkeypatch):
     monkeypatch.setattr(agent_module, "ELEVENLABS_VOICE_ID", "shared_voice")
     monkeypatch.setattr(agent_module, "ELEVENLABS_VOICE_ID_MALE", "male_voice")
     monkeypatch.setattr(agent_module, "ELEVENLABS_VOICE_ID_FEMALE", "")
+    monkeypatch.setattr(agent_module, "ELEVENLABS_MODEL", "eleven_flash_v2_5")      # whatever the local .env says
     male, _ = build_tts(resolve_voice("en", gender="male", provider="elevenlabs"))
     female, _ = build_tts(resolve_voice("en", gender="female", provider="elevenlabs"))
     assert male._opts.voice_id == "male_voice"          # the male-specific voice wins
     assert female._opts.voice_id == "shared_voice"       # no female-specific voice set: falls back to the shared one
+
+
+def test_dialogue_models_use_the_dialogue_plugin_with_voice_language_and_stability(monkeypatch):
+    import agent as agent_module
+    monkeypatch.setattr(agent_module, "ELEVENLABS_API_KEY", "k")
+    monkeypatch.setattr(agent_module, "ELEVENLABS_MODEL", "eleven_v3_conversational")
+    monkeypatch.setattr(agent_module, "ELEVENLABS_VOICE_ID_MALE", "male_voice")
+    monkeypatch.setattr(agent_module, "ELEVENLABS_STABILITY", 0.9)
+    engine, _ = build_tts(resolve_voice("te", gender="male", provider="elevenlabs"))
+    assert (engine._voice_id, engine._language, engine._stability, engine._model) == ("male_voice", "te", 0.9, "eleven_v3_conversational")

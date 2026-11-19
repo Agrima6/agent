@@ -28,6 +28,7 @@ State lives on the runner, is changed only here (after a deterministic decision)
 import asyncio
 import re_dev as re
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable
@@ -49,6 +50,9 @@ from turn_state import TurnPhase, TurnStateMachine
 PREFLIGHT_QUESTION_ID = "p_intro"      # everything said during the opening (greeting, doubts, readiness, environment check) is filed here
 
 logger = logging.getLogger("conductor")
+# Diagnostic only: log what the interviewer heard and said (first 120 characters). Off by default - transcripts are
+# candidates' words, so turn it on only while investigating a problem.
+LOG_TRANSCRIPTS = os.getenv("LOG_TRANSCRIPTS", "").lower() in ("1", "true", "yes", "on")
 
 _DURATION_Q = re.compile(r"\b(how long|how much time|duration|how many minutes|kitna time|kitne (?:minute|der)|कितना (?:समय|टाइम)|कितनी देर)\b", re.I)
 _FORMAT_Q = re.compile(r"\b(how (?:does|will|is) (?:this|the interview|it) (?:work|go|going)|what (?:is|are) the (?:format|process|rules)|how does the interview|kaise (?:hoga|chalega)|कैसे (?:होगा|चलेगा))\b", re.I)
@@ -316,6 +320,8 @@ class InterviewConductor:
         if r.terminal and speech.action != "INTERVIEW_COMPLETE":
             return
         self._last_spoken = speech.text
+        if LOG_TRANSCRIPTS:
+            logger.info("said interview=%s action=%s language=%s text=%r", r.interview_id, speech.action, self.language, speech.text[:120])
         if speech.action in ("GREETING", "NEXT_QUESTION", "FOLLOW_UP", "CLARIFICATION", "SMALL_TALK", "LANGUAGE_SWITCH", "REPEAT"):
             self._last_prompt = speech.text
         self.turns.go(TurnPhase.COMPLETED if speech.action == "INTERVIEW_COMPLETE" else TurnPhase.QUESTION_DELIVERED)
@@ -340,6 +346,8 @@ class InterviewConductor:
     async def _handle(self, text: str, generation: int) -> None:
         r = self.runner
         self._turn_original = text
+        if LOG_TRANSCRIPTS:
+            logger.info("heard interview=%s language=%s text=%r", r.interview_id, self.language, text[:120])
         try:
             await self._handle_turn(text, generation)
         finally:
