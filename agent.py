@@ -542,8 +542,16 @@ def prewarm(proc):
     # setting never took effect and every reply waited at least 0.55 s. 0.4 s lines the two up; the
     # end-of-turn model still protects a candidate who pauses mid-thought (it holds the turn open up to
     # max_delay). Set VAD_MIN_SILENCE_S=0.55 to restore the previous behaviour.
+    #
+    # Background noise (a fan, traffic, a keyboard, people talking far away) was starting turns, so the interviewer
+    # answered sounds. Two settings make the detector less eager: the speech-probability a frame must reach before it
+    # counts as speech (Silero's default 0.5), and how long speech must last before a turn starts (default 0.05 s, which
+    # lets a single click through). Both can be tuned without a deploy: VAD_ACTIVATION_THRESHOLD (0.3-0.9) and
+    # VAD_MIN_SPEECH_S. A very quiet speaker can lower the threshold; a noisy room can raise it.
     proc.userdata["vad"] = silero.VAD.load(
-        min_silence_duration=float(os.getenv("VAD_MIN_SILENCE_S") or 0.4))
+        min_silence_duration=float(os.getenv("VAD_MIN_SILENCE_S") or 0.4),
+        activation_threshold=min(0.9, max(0.3, float(os.getenv("VAD_ACTIVATION_THRESHOLD") or 0.6))),
+        min_speech_duration=min(0.6, max(0.05, float(os.getenv("VAD_MIN_SPEECH_S") or 0.15))))
 
 
 if __name__ == "__main__":
