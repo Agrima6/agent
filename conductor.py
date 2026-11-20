@@ -105,6 +105,13 @@ class _Stale(Exception):
     """The interview ended while an LLM call was in flight: discard its result."""
 
 
+# Actions that leave the candidate with something to answer.
+PROMPT_ACTIONS = frozenset({"GREETING", "NEXT_QUESTION", "FOLLOW_UP", "CLARIFICATION", "SMALL_TALK", "LANGUAGE_SWITCH", "REPEAT"})
+# How long to wait before repeating the question when the interviewer was cut off / when nothing was heard at all.
+CUT_OFF_REPEAT_AFTER_S = float(os.getenv("CUT_OFF_REPEAT_AFTER_S") or 5)
+SILENCE_REPEAT_AFTER_S = float(os.getenv("SILENCE_REPEAT_AFTER_S") or 40)
+
+
 class InterviewConductor:
     def __init__(self, runner: InterviewRunner, speak: Callable[[Speech], Awaitable[None]], *,
                  language: str = "en", role: str = "", experience_level: str = "",
@@ -146,6 +153,8 @@ class InterviewConductor:
         # speaker answering a technical question in English must not be switched back to English behind their request.
         self._language_locked = False
         self._turn_original: str | None = None    # the transcript exactly as heard, for the turn being handled
+        self._turn_seq = 0                        # bumped on every committed candidate turn (the silence watchdog compares it)
+        self._watchdog: asyncio.Task | None = None
         self.turns = TurnStateMachine()          # QUESTION_DELIVERED -> ... -> ANSWER_SAVED -> DECIDING (see turn_state.py)
         self._advanced_turn = 0                  # the finalized-turn number that already advanced the interview
 
@@ -230,6 +239,9 @@ class InterviewConductor:
                     return
                 generation = r.generation
                 started = time.perf_counter()
+                self._turn_seq += 1
+                if self._watchdog and not self._watchdog.done():
+                    self._watchdog.cancel()
                 if not self.turns.go(TurnPhase.TURN_FINALIZED):
                     # A previous turn ended without the interviewer speaking (e.g. a failed provider call). Resync and
                     # carry on rather than refusing a candidate's answer; the rejected transition is in the log.
@@ -241,6 +253,13 @@ class InterviewConductor:
                     await self._handle(text or "", generation)
                 except _Stale:
                     logger.info("discarded stale result interview=%s (interview ended mid-call)", r.interview_id)
+                except Exception:  # noqa: BLE001 - one bad turn must never leave the interviewer silent for good
+                    logger.exception("turn failed interview=%s - asking the question again", r.interview_id)
+                    self.turns.phase = TurnPhase.QUESTION_DELIVERED
+                    q = r.current_question
+                    if q is not None and not r.terminal:
+                        again = self._last_prompt or q.get("question_text", "")
+                        await self._say(Speech(again, "REPEAT", q["id"], q.get("question_text", "")))
                 finally:
                     logger.info("turn_handled interview=%s question=%s ms=%d", r.interview_id,
                                 r.state.question_id if r.state else "-", int((time.perf_counter() - started) * 1000))
@@ -328,12 +347,40 @@ class InterviewConductor:
         r.record_turn_nowait(speech.question_id or (r.state.question_id if r.state else ""), "agent", speech.text,
                              is_followup=speech.is_followup, action=speech.action,
                              question_text=speech.question_text)
+        interrupted = False
         try:
-            await self._speak(speech)
+            interrupted = bool(await self._speak(speech))
         except Exception:
             # A TTS failure must never take the interview down: the transcript already has the
             # line, and the candidate can ask for it to be repeated.
             logger.exception("speech failed interview=%s action=%s", r.interview_id, speech.action)
+            interrupted = True          # the line may not have been heard: treat it like a cut-off one
+        if speech.action in PROMPT_ACTIONS and not r.terminal:
+            self._arm_watchdog(speech, cut_off=interrupted)
+
+    def _arm_watchdog(self, speech: Speech, *, cut_off: bool) -> None:
+        """After the interviewer asks something, make sure the interview cannot stall in silence. Noise can cut the
+        interviewer off mid-sentence (and a noisy room keeps the candidate from ever counting as "away"), so the
+        question is repeated when nothing real was said afterwards."""
+        if self._watchdog and not self._watchdog.done():
+            self._watchdog.cancel()
+        seq = self._turn_seq
+        delay = CUT_OFF_REPEAT_AFTER_S if cut_off else SILENCE_REPEAT_AFTER_S
+
+        async def run() -> None:
+            await asyncio.sleep(delay)
+            r = self.runner
+            if r.terminal or seq != self._turn_seq or self._lock.locked() or self.turns.phase != TurnPhase.QUESTION_DELIVERED:
+                return
+            self._event("silence_watchdog", cut_off=cut_off)
+            q = r.current_question
+            text = self._last_prompt or speech.text
+            async with self._lock:
+                if r.terminal or seq != self._turn_seq:
+                    return
+                await self._say(Speech(text, "REPEAT", speech.question_id or (q or {}).get("id", ""), speech.question_text or (q or {}).get("question_text", "")))
+
+        self._watchdog = asyncio.get_running_loop().create_task(run())
 
     def _record_candidate(self, text: str, intent: Intent | str, *, followup: bool = False) -> None:
         r = self.runner

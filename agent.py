@@ -82,7 +82,10 @@ TURN_MAX_DELAY_S = _float_env("TURN_MAX_DELAY_S", 6.0)
 
 TURN_HANDLING = {
     "endpointing": {"min_delay": TURN_MIN_DELAY_S, "max_delay": max(TURN_MAX_DELAY_S, TURN_MIN_DELAY_S)},
-    "interruption": {"enabled": True},
+    # Noise and side conversations must not cut the interviewer off: an interruption needs about a second of real speech
+    # (two words or more), and a cut-off that turns out to be noise lets the interviewer carry on.
+    "interruption": {"enabled": True, "min_duration": _float_env("INTERRUPT_MIN_DURATION_S", 1.0), "min_words": 2,
+                     "resume_false_interruption": True, "false_interruption_timeout": 2.0},
     "preemptive_generation": {"enabled": False},
 }
 
@@ -185,11 +188,12 @@ class InterviewerAgent(Agent):
         await self.conductor.handle_candidate_turn(heard)
         raise StopResponse()  # every reply is produced by the conductor; never by a free-form LLM
 
-    async def _speak(self, speech: Speech) -> None:
+    async def _speak(self, speech: Speech) -> bool:
+        """Speaks the line; True when the candidate (or noise) cut it off."""
         text = prepare_for_speech(speech.text)
         if not text:
             logger.warning("nothing speakable for action=%s", speech.action)
-            return
+            return False
         self._publish_line("agent", text)
         turn_trace.mark("say_called")
         handle = self.session.say(text, allow_interruptions=speech.interruptible, add_to_chat_ctx=False)
@@ -197,6 +201,7 @@ class InterviewerAgent(Agent):
         if handle.interrupted:
             logger.info("event=interruption interview=%s action=%s question=%s", self.runner.interview_id,
                         speech.action, speech.question_id)
+        return bool(handle.interrupted)
 
 
 # STT_VOCABULARY_HINT lives in language_policy (it must be known to the echo detector too).

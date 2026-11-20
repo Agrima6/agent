@@ -32,6 +32,9 @@ def question_topic(question: dict) -> str:
     return (question.get("topic") or (question.get("competencies") or [""])[0] or "").replace("_", " ").strip()
 
 
+MAX_CROSS_QUESTIONS = 1
+
+
 class InterviewRunner:
     def __init__(self, http: httpx.AsyncClient, interview_id: str, plan: dict, *, candidate_name: str = "",
                  coverage_threshold: float = 0.7, max_followups_per_question: int = 2,
@@ -105,8 +108,8 @@ class InterviewRunner:
     def _new_question_state(self, question: dict) -> QuestionState:
         priority = question.get("focus_priority")
         max_followups = followup_limit(self.max_followups_per_question, priority)
-        if question.get("id") in self.opening_ids:
-            max_followups = min(max_followups, 1)        # the opening stage stays short: at most one follow-up each
+        # One cross-question per question at most, however the interview was configured: more feels like the topic is being dragged.
+        max_followups = min(max_followups, MAX_CROSS_QUESTIONS)
         return QuestionState(
             question_id=question["id"], topic=question_topic(question),
             focus=question.get("focus") or "", focus_priority=priority or "",

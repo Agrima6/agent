@@ -101,9 +101,9 @@ def test_high_priority_questions_get_extra_followups_low_ones_fewer():
                           {"id": "b", "question_text": "q", "focus_priority": "LOW"},
                           {"id": "c", "question_text": "q"}]}
     r = InterviewRunner(None, "i", plan, max_followups_per_question=2)
-    assert r.state.max_followups == 3
+    assert r.state.max_followups == 1          # never more than one cross-question, even for HIGH priority
     r.advance(); assert r.state.max_followups == 1
-    r.advance(); assert r.state.max_followups == 2
+    r.advance(); assert r.state.max_followups == 1
 
 
 def test_progress_hook_reports_question_and_never_breaks_the_interview():
