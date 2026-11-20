@@ -117,7 +117,7 @@ def make_turn_handling() -> dict:
 
 class InterviewerAgent(Agent):
     def __init__(self, runner: InterviewRunner, *, language: str, role: str, experience_level: str,
-                 plain_language: bool, interviewer_name: str = "Aarav", publish=None, candidate_ready=None,
+                 plain_language: bool, spoken_role: str = "", interviewer_name: str = "Aarav", publish=None, candidate_ready=None,
                  on_language_change=None, auto_language: bool = False, supported_languages=None):
         super().__init__(instructions=_AGENT_DESCRIPTION)
         self.runner = runner
@@ -130,7 +130,7 @@ class InterviewerAgent(Agent):
         # re-sent when a candidate connects; otherwise a reload or reconnect leaves the Transcript tab empty.
         self._caption_log: deque = deque(maxlen=200)
         self.conductor = InterviewConductor(
-            runner, self._speak, language=language, role=role, experience_level=experience_level,
+            runner, self._speak, language=language, role=role, spoken_role=spoken_role, experience_level=experience_level,
             plain_language=plain_language, interviewer_name=interviewer_name, on_language_change=on_language_change,
             auto_language=auto_language, supported_languages=supported_languages)
 
@@ -477,7 +477,7 @@ async def entrypoint(ctx: JobContext):
             spoken_languages = frozenset(spoken_languages & allowed_by_hr) | {language}
         if data.get("allow_language_switch") is False:
             spoken_languages = frozenset({language})
-        interviewer = InterviewerAgent(runner, language=language, role=role_name,
+        interviewer = InterviewerAgent(runner, language=language, role=role_name, spoken_role=data.get("role_display") or role_name,
                                        experience_level=data.get("experience_level") or "",
                                        plain_language=plain_language,
                                        interviewer_name=INTERVIEWER_NAMES.get(voice.gender, "Aarav"),

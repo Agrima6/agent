@@ -117,7 +117,7 @@ class InterviewConductor:
                  language: str = "en", role: str = "", experience_level: str = "",
                  plain_language: bool = False, composer: Composer | None = None,
                  judge: Callable = judge_answer, interviewer_name: str = "Aarav", on_language_change=None,
-                 auto_language: bool = False, supported_languages=None):
+                 auto_language: bool = False, supported_languages=None, spoken_role: str = ""):
         self.runner = runner
         # Languages the configured voice can actually speak (None = all). A switch - requested or followed - to
         # anything else is refused rather than attempted with a voice that cannot pronounce it.
@@ -130,6 +130,8 @@ class InterviewConductor:
         self._speak = speak
         self.language = normalize_language(language)
         self.role = role
+        # What is said aloud about the job: the hiring team's own name for the drive. self.role still drives how answers are judged.
+        self.spoken_role = spoken_role or role
         self.interviewer_name = interviewer_name
         self.experience_level = experience_level
         self.plain_language = plain_language
@@ -189,13 +191,13 @@ class InterviewConductor:
                 return await self._resume()
             if r.stage == flow.MAIN_INTERVIEW:        # opening disabled (small_talk_rounds=0): the plain greeting, then questions
                 r.persist_progress_nowait("greeting")
-                return await self._say(Speech(refusals.greeting(self.language, r.candidate_name, self.role, self.interviewer_name),
+                return await self._say(Speech(refusals.greeting(self.language, r.candidate_name, self.spoken_role, self.interviewer_name),
                                               "GREETING", PREFLIGHT_QUESTION_ID))
             # Stage 1: the personalised introduction, which ends with the clarification question (stage 2 begins).
             r.set_stage(flow.INTRODUCTION)
             r.persist_progress_nowait("introduction")
             self._event("stage", stage=flow.INTRODUCTION)
-            await self._say(Speech(refusals.introduction(self.language, r.candidate_name, self.role, self.interviewer_name,
+            await self._say(Speech(refusals.introduction(self.language, r.candidate_name, self.spoken_role, self.interviewer_name,
                                                          r.candidate_facts), "GREETING", PREFLIGHT_QUESTION_ID))
             r.set_stage(flow.CLARIFICATION)
             r.persist_progress_nowait("clarification")
@@ -581,7 +583,7 @@ class InterviewConductor:
             # In the opening there is no question yet: repeat what is being waited on (the introduction if nothing was
             # answered yet, otherwise the pending doubt / readiness / environment prompt).
             if r.stage in (flow.INTRODUCTION, flow.CLARIFICATION) and r.clarifications == 0:
-                spoken = refusals.introduction(self.language, r.candidate_name, self.role, self.interviewer_name, r.candidate_facts)
+                spoken = refusals.introduction(self.language, r.candidate_name, self.spoken_role, self.interviewer_name, r.candidate_facts)
             else:
                 spoken = self._stage_prompt()
             if intent == Intent.LANGUAGE_REQUEST:
@@ -647,8 +649,8 @@ class InterviewConductor:
             return refusals.PROCESS_ANSWERS["duration"][L].format(minutes=r.duration_minutes)
         if topic == "format":
             return refusals.PROCESS_ANSWERS["format"][L]
-        if topic == "role" and self.role:
-            return refusals.CLARIFY_ROLE[L].format(role=refusals._clean(self.role, 60))
+        if topic == "role" and self.spoken_role:
+            return refusals.CLARIFY_ROLE[L].format(role=refusals._clean(self.spoken_role, 60))
         if topic == "result":
             return refusals.CLARIFY_RESULT[L]
         return refusals.CLARIFY_UNKNOWN[L]

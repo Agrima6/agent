@@ -48,6 +48,9 @@ class Interview(Base):
     allowed_languages = Column(JSON)
     allow_language_switch = Column(Integer, default=1)
     only_hr_questions = Column(Integer, default=0)
+    # What the interviewer SAYS the interview is for: the name the hiring team gave their drive (the role record's own
+    # name is for classifying the job, and is often a generic title).
+    display_role = Column(String)
     duration_minutes = Column(Integer, default=30)
     min_questions = Column(Integer, default=4)
     max_questions = Column(Integer, default=7)
@@ -192,7 +195,7 @@ _COLUMN_PATCHES: dict[str, dict[str, str]] = {
         "depth_probe_enabled": "INTEGER DEFAULT 1", "experience_level": "VARCHAR",
         "voice_gender": "VARCHAR", "voice_speaker": "VARCHAR", "voice_pace": "FLOAT",
         "voice_used": "JSON", "progress": "JSON", "voice_provider": "VARCHAR",
-        "allowed_languages": "JSON", "allow_language_switch": "INTEGER DEFAULT 1", "only_hr_questions": "INTEGER DEFAULT 0",
+        "allowed_languages": "JSON", "allow_language_switch": "INTEGER DEFAULT 1", "only_hr_questions": "INTEGER DEFAULT 0", "display_role": "VARCHAR",
     },
     "reports": {"status": f"VARCHAR DEFAULT '{REPORT_READY}'", "error": "TEXT"},
     "interview_turns": {"intent": "VARCHAR", "action": "VARCHAR"},
