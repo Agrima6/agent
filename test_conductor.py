@@ -728,3 +728,12 @@ async def test_hr_follow_up_count_is_exactly_the_ceiling_for_that_question(harne
         followup("And what about the buckets themselves?", action="CLARIFICATION"), lead_in("")])
     actions = [(await h.say("It keeps the items in a list, I guess.")).action for _ in range(followups + 1)]
     assert actions == ["CLARIFICATION"] * followups + ["NEXT_QUESTION"]
+
+
+async def test_the_interviewer_says_the_name_hr_gave_the_drive(harness_factory):
+    h = harness_factory(small_talk_rounds=0)
+    h.conductor.spoken_role = "Campus Hiring 2026 - Backend"
+    await h.conductor.start() if hasattr(h.conductor, "start") else None
+    said = " ".join(s.text for s in h.spoken)
+    assert "Campus Hiring 2026 - Backend" in said
+    assert h.conductor.role == "Backend Engineer"          # judging still uses the classifying role
