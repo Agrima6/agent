@@ -180,6 +180,9 @@ def _parse_focus_areas(raw: str, role_competencies: list[dict]):
     return build_focus_areas(items, role_competencies)
 
 
+MAX_HR_FOLLOWUPS = 3
+
+
 def _parse_hr_questions(raw: str, role_competencies: list[dict]) -> list[dict]:
     """HR-configured questions arrive as a JSON list of {id?, text, topic?, time_limit?}. They are
     validated and normalised into plan questions here; a malformed payload is rejected outright
@@ -203,8 +206,14 @@ def _parse_hr_questions(raw: str, role_competencies: list[dict]) -> list[dict]:
             time_limit = int(item.get("time_limit") or item.get("timeLimit") or 0)
         except (TypeError, ValueError):
             time_limit = 0
+        # HR decides how many follow-ups THIS question may get (0 = none). Absent means one.
+        raw_followups = item.get("followUps", item.get("followups", item.get("max_followups")))
+        try:
+            followups = max(0, min(MAX_HR_FOLLOWUPS, int(raw_followups))) if raw_followups not in (None, "") else 1
+        except (TypeError, ValueError):
+            followups = 1
         questions.append({
-            "id": f"hr_{i}", "type": "hr", "difficulty": "medium", "competencies": top,
+            "id": f"hr_{i}", "type": "hr", "difficulty": "medium", "competencies": top, "max_followups": followups,
             "question_text": text, "topic": str(item.get("topic") or "").strip()[:80],
             "expected_topics": [], "followup_topics": [],
             **({"time_limit": max(30, min(600, time_limit))} if time_limit else {}),

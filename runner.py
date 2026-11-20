@@ -108,8 +108,11 @@ class InterviewRunner:
     def _new_question_state(self, question: dict) -> QuestionState:
         priority = question.get("focus_priority")
         max_followups = followup_limit(self.max_followups_per_question, priority)
-        # One cross-question per question at most, however the interview was configured: more feels like the topic is being dragged.
-        max_followups = min(max_followups, MAX_CROSS_QUESTIONS)
+        if question.get("type") == "hr" and isinstance(question.get("max_followups"), int):
+            max_followups = max(0, question["max_followups"])      # HR chose it for this very question
+        else:
+            # Questions the interviewer chose itself get at most one cross-question: more feels like dragging the topic.
+            max_followups = min(max_followups, MAX_CROSS_QUESTIONS)
         return QuestionState(
             question_id=question["id"], topic=question_topic(question),
             focus=question.get("focus") or "", focus_priority=priority or "",
