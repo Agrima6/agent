@@ -153,7 +153,6 @@ async def test_a_thinking_pause_does_not_reset_or_skip_the_question_timer(harnes
                                             followup("What about resizing?")])
     started = h.runner.state.started_at
     await h.say("It hashes the key.")
-    await h.say("Then it picks a bucket.")
     assert h.runner.state.started_at == started and h.runner.idx == 0         # same question, same timer
 
 

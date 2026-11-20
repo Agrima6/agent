@@ -12,6 +12,7 @@ import pytest
 import refusals
 from composer import Composer
 from conductor import InterviewConductor, Speech
+from turn_state import TurnPhase
 from interaction_guard import Intent
 from llm_provider import LLMError
 from output_guard import has_filler, has_judgement, violations
@@ -148,9 +149,10 @@ async def test_medium_answer_followup_targets_the_missing_concept_in_the_candida
     assert "collision handling" in h.provider.calls[0]["user"]        # the target concept was given to the composer
 
 
-@pytest.mark.parametrize("limit", [1, 2])
-async def test_followup_limit_is_enforced_then_the_next_configured_question_is_asked(harness_factory, limit):
-    h = harness_factory(max_followups=limit, evaluations=[weak()] * (limit + 1), composer_responses=[
+@pytest.mark.parametrize("configured", [1, 2, 5])
+async def test_followup_limit_is_enforced_then_the_next_configured_question_is_asked(harness_factory, configured):
+    limit = 1       # one cross-question per question at most, whatever the interview was configured with
+    h = harness_factory(max_followups=configured, evaluations=[weak()] * (limit + 1), composer_responses=[
         followup("Could you say more about how keys are stored?", action="CLARIFICATION"),
         followup("Could you say more about how keys are stored in buckets?", action="CLARIFICATION"),
         lead_in("")])
@@ -671,3 +673,48 @@ async def test_following_the_speaker_can_be_switched_off(harness_factory):
     h = harness_factory(auto_language=False, evaluations=[medium()], composer_responses=[followup("Tell me more.")])
     await h.say(HI_ANSWER)
     assert h.conductor.language == "en"
+
+
+# ---- the interviewer never goes silent for good -----------------------------------------------------------------------
+async def test_a_cut_off_question_is_repeated_when_nothing_real_was_said_after(harness_factory, monkeypatch):
+    import conductor
+    monkeypatch.setattr(conductor, "CUT_OFF_REPEAT_AFTER_S", 0.05)
+    h = harness_factory()
+    cut_off = []
+
+    async def speak(speech):
+        h.spoken.append(speech)
+        return not cut_off       # the first line is cut off by noise, the repeat is heard
+    h.conductor._speak = speak
+    await h.conductor._say(Speech("Tell me about hash maps and how they handle collisions.", "NEXT_QUESTION", "q1", "Q"))
+    cut_off.append(1)
+    await asyncio.sleep(0.2)
+    assert [s.action for s in h.spoken] == ["NEXT_QUESTION", "REPEAT"]
+    assert h.spoken[-1].text == "Tell me about hash maps and how they handle collisions."
+
+
+async def test_a_real_answer_cancels_the_repeat(harness_factory, monkeypatch):
+    import conductor
+    monkeypatch.setattr(conductor, "CUT_OFF_REPEAT_AFTER_S", 0.2)
+    h = harness_factory(evaluations=[strong()], composer_responses=[lead_in("")], depth_probe=False)
+
+    async def speak(speech):
+        h.spoken.append(speech)
+        return True
+    h.conductor._speak = speak
+    await h.conductor._say(Speech("First question?", "NEXT_QUESTION", "q1", "Q"))
+    await h.say("It hashes the key to find a bucket and chains collisions.")
+    n = len(h.spoken)
+    await asyncio.sleep(0.4)
+    assert all(s.action != "REPEAT" for s in h.spoken[:n])
+
+
+async def test_a_crashing_turn_is_recovered_by_asking_again(harness_factory):
+    h = harness_factory()
+
+    def boom(*a, **k):
+        raise RuntimeError("provider exploded")
+    h.conductor.judge = boom
+    out = await h.say("It hashes the key to find a bucket and chains collisions.")
+    assert out.action == "REPEAT"
+    assert h.conductor.turns.phase == TurnPhase.QUESTION_DELIVERED
