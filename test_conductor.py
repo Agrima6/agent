@@ -718,3 +718,13 @@ async def test_a_crashing_turn_is_recovered_by_asking_again(harness_factory):
     out = await h.say("It hashes the key to find a bucket and chains collisions.")
     assert out.action == "REPEAT"
     assert h.conductor.turns.phase == TurnPhase.QUESTION_DELIVERED
+
+
+@pytest.mark.parametrize("followups", [0, 1, 2])
+async def test_hr_follow_up_count_is_exactly_the_ceiling_for_that_question(harness_factory, followups):
+    q1 = dict(Q1, type="hr", max_followups=followups)
+    h = harness_factory(questions=(q1, Q2), evaluations=[weak()] * (followups + 1), composer_responses=[
+        followup("Could you say more about how keys are stored?", action="CLARIFICATION"),
+        followup("And what about the buckets themselves?", action="CLARIFICATION"), lead_in("")])
+    actions = [(await h.say("It keeps the items in a list, I guess.")).action for _ in range(followups + 1)]
+    assert actions == ["CLARIFICATION"] * followups + ["NEXT_QUESTION"]

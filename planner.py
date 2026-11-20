@@ -229,8 +229,9 @@ def _build_plan_with_hr_questions(role_competencies: list[dict], role_name: str,
     questions are never displaced or duplicated."""
     questions = [
         {"id": "p_intro", "type": "introduction", "question_text": None},
-        {"id": "p_candidate_intro", "type": "candidate_introduction",
-         "question_text": "To start, could you tell me a little about yourself and what you've been working on recently?"},
+        # Only HR's questions: no extra "tell me about yourself" question on top of them.
+        *([] if only_hr else [{"id": "p_candidate_intro", "type": "candidate_introduction",
+                               "question_text": "To start, could you tell me a little about yourself and what you've been working on recently?"}]),
         *hr_questions,
     ]
     target_entries = max(min_questions, 4) + 1
