@@ -131,6 +131,44 @@ def role_model(role: str) -> str | None:
     return _ROLE_DEFAULTS.get(get_provider().name, {}).get(role)
 
 
+class FallbackProvider:
+    """Tries the main provider, then each backup in turn when a call fails (a daily token limit, an outage...).
+    Groq rate-limits per model and per key, so a different model or a second key keeps interviews and scoring
+    going instead of silently producing empty judgements and zero scores."""
+
+    def __init__(self, primary: LLMProvider, backups: list[LLMProvider]):
+        self.primary, self.backups = primary, backups
+        self.name, self.model = primary.name, primary.model
+
+    def complete_json(self, system: str, user: str, **kwargs) -> dict:
+        try:
+            return self.primary.complete_json(system, user, **kwargs)
+        except LLMError as first:
+            error = first
+        kwargs = {**kwargs, "model": None}  # a per-role model name belongs to the main provider only
+        for backup in self.backups:
+            try:
+                result = backup.complete_json(system, user, **kwargs)
+                logger.warning("llm_fallback_used primary=%s backup=%s/%s", self.primary.name, backup.name, backup.model)
+                return result
+            except LLMError as exc:
+                error = exc
+        raise error
+
+
+def _build_backups(primary_model: str) -> list[LLMProvider]:
+    backups: list[LLMProvider] = []
+    second_key = os.getenv("GROQ_API_KEY_BACKUP", "")
+    if second_key:
+        backups.append(OpenAICompatibleProvider("groq-backup", second_key, "https://api.groq.com/openai/v1", primary_model))
+    if OPENAI_API_KEY:
+        backups.append(OpenAICompatibleProvider("openai", OPENAI_API_KEY, None, os.getenv("LLM_BACKUP_MODEL", "gpt-4o-mini")))
+    smaller = os.getenv("LLM_FALLBACK_GROQ_MODEL", "openai/gpt-oss-20b")
+    if GROQ_API_KEY and smaller and smaller != primary_model:
+        backups.append(OpenAICompatibleProvider("groq", GROQ_API_KEY, "https://api.groq.com/openai/v1", smaller))
+    return backups
+
+
 _provider: LLMProvider | None = None
 
 
@@ -139,11 +177,12 @@ def get_provider() -> LLMProvider:
     if _provider is None:
         choice = (os.getenv("LLM_PROVIDER") or "groq").lower()
         if choice == "openai" and OPENAI_API_KEY:
-            _provider = OpenAICompatibleProvider("openai", OPENAI_API_KEY, None,
-                                                 os.getenv("LLM_MODEL", "gpt-4o-mini"))
+            primary = OpenAICompatibleProvider("openai", OPENAI_API_KEY, None, os.getenv("LLM_MODEL", "gpt-4o-mini"))
         else:
-            _provider = OpenAICompatibleProvider("groq", GROQ_API_KEY, "https://api.groq.com/openai/v1",
-                                                 os.getenv("LLM_MODEL", "openai/gpt-oss-120b"))
+            primary = OpenAICompatibleProvider("groq", GROQ_API_KEY, "https://api.groq.com/openai/v1",
+                                               os.getenv("LLM_MODEL", "openai/gpt-oss-120b"))
+        backups = [b for b in _build_backups(primary.model) if not (b.name == primary.name and b.model == primary.model)]
+        _provider = FallbackProvider(primary, backups) if backups else primary
     return _provider
 
 

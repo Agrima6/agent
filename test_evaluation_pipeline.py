@@ -11,7 +11,7 @@ import refusals
 import scoring
 import states
 import test_end_interview as base
-from db import Candidate, Interview, InterviewTurn, Role, transition_interview
+from db import Candidate, Interview, InterviewTurn, Report, Role, transition_interview
 from intelligence_report import build_intelligence, serves_focus
 from test_conductor import Harness, Q1, Q2, Q3, lead_in, strong
 
@@ -357,3 +357,20 @@ def test_the_evaluation_uses_this_interviews_own_turns_plan_and_candidate_only(s
     text = str(report["content"])
     assert "MY-ANSWER-TEXT" in text and "SOMEONE-ELSES-ANSWER" not in text
     assert report["content"]["candidate"] == "Asha"
+
+
+def test_a_failed_report_can_be_rebuilt_and_a_running_or_unfinished_one_is_left_alone(secured, monkeypatch):
+    iid = _interview()
+    _persist(iid, [("q_dynamic_1", "agent", "x", None, "NEXT_QUESTION"),
+                   ("q_dynamic_1", "candidate", "I would build a demo and handle errors", "answer", None)])
+    assert secured.post(f"/v1/interviews/{iid}/rescore", headers=H).status_code == 409   # still in progress
+    secured.post(f"/v1/interviews/{iid}/complete", headers=H)
+    db = base.TestSessionLocal()
+    report = db.query(Report).filter(Report.interview_id == iid).first()
+    report.status, report.error = "FAILED", "groq request failed: RateLimitError"
+    db.commit(); db.close()
+    body = secured.post(f"/v1/interviews/{iid}/rescore", headers=H).json()
+    assert body["status"] == "PENDING"
+    again = secured.get(f"/v1/interviews/{iid}/report", headers=H).json()
+    assert again["report_status"] == "READY" and again["error"] is None   # the test client runs the background job
+    assert secured.post("/v1/interviews/missing/rescore", headers=H).status_code == 404
