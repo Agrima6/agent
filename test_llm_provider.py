@@ -224,3 +224,22 @@ def test_structured_json_only_lowers_reasoning_effort_when_a_caller_asks_for_it(
         llm_provider.set_provider(None)
     assert "reasoning_effort" not in completions.calls[0] and "max_tokens" not in completions.calls[0]
     assert completions.calls[1]["reasoning_effort"] == "low" and completions.calls[1]["max_tokens"] >= 2000
+
+
+def test_a_rate_limited_main_model_falls_back_to_a_backup_instead_of_failing():
+    from llm_provider import FallbackProvider
+
+    class Down:
+        name, model = "groq", "openai/gpt-oss-120b"
+        def complete_json(self, *a, **k): raise LLMError("groq request failed: RateLimitError")
+
+    class Up:
+        name, model = "groq", "openai/gpt-oss-20b"
+        def __init__(self): self.models = []
+        def complete_json(self, *a, **k): self.models.append(k.get("model")); return {"ok": True}
+
+    backup = Up()
+    assert FallbackProvider(Down(), [backup]).complete_json("s", "u", model="openai/gpt-oss-120b") == {"ok": True}
+    assert backup.models == [None]   # a per-role model name is not sent to the backup
+    with pytest.raises(LLMError):
+        FallbackProvider(Down(), [Down()]).complete_json("s", "u")

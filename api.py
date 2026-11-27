@@ -898,6 +898,28 @@ def get_completion_receipt(interview_id: str, db: Session = Depends(get_db)):
                         if submitted else "Your interview is still in progress.")}
 
 
+@app.post("/v1/interviews/{interview_id}/rescore", dependencies=[Depends(require_service_key)])
+def rescore_interview(interview_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Build the report again from the saved conversation - for a report that FAILED, or was scored while the
+    language model was unavailable. Only an interview whose session is over can be rescored, and it never
+    touches the transcript, so it is safe to call twice (a report that is already being built is left alone)."""
+    interview = db.get(Interview, interview_id)
+    if not interview:
+        raise HTTPException(404, "interview not found")
+    if interview.status not in (states.FINALIZING, states.COMPLETED):
+        raise HTTPException(409, "the interview has not finished yet")
+    report = db.query(Report).filter(Report.interview_id == interview_id).order_by(Report.id.desc()).first()
+    if report and report.status in (REPORT_PENDING, REPORT_PROCESSING):
+        return {"report_id": report.id, "status": report.status, "already_running": True}
+    if not report:
+        raise HTTPException(404, "no report to rebuild")
+    report.status = REPORT_PENDING
+    report.error = None
+    db.commit()
+    background_tasks.add_task(_run_scoring_job, interview_id, report.id)
+    return {"report_id": report.id, "status": REPORT_PENDING}
+
+
 @app.get("/v1/interviews/{interview_id}/report", dependencies=[Depends(require_service_key)])
 def get_report(interview_id: str, db: Session = Depends(get_db)):
     """HR-facing evaluation report. Authenticated service-to-service: the HR backend authorises the HR user (role,
